@@ -1,0 +1,24 @@
+services:
+  krakend:
+    image: krakend:watch
+    container_name: ${APP_NAME}_krakend
+    volumes:
+      - ./config/krakend:/etc/krakend/
+    ports:
+      - "$API_GATEWAY_PORT:8080"
+    command: ["run", "--config", "/etc/krakend/krakend.json"]
+
+  registry:
+    image: node:24
+    container_name: ${APP_NAME}_registry
+    working_dir: /app
+    volumes:
+      - ./registry:/app
+      - /var/run/docker.sock.raw:/var/run/docker.sock
+    env_file: .env
+    command: "npm run start:dev"
+
+networks:
+  default:
+    name: ${APP_NAME}
+    external: true

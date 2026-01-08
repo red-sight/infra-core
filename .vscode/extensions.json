@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    // must have
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    // useful
+    "editorconfig.editorconfig",
+  ]
+}
