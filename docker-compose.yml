@@ -1,4 +1,52 @@
 services:
+  traefik:
+    image: traefik:v3.6.2
+    ports:
+      - '80:80'
+      - '8081:8080'
+    extra_hosts:
+      - 'keycloak.localhost:host-gateway'
+    env_file:
+      - path: .env
+        required: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml
+      - ./config/traefik/dynamic-configuration.yml:/etc/traefik/dynamic-configuration.yml
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.dashboard.rule=Host(`dashboard.localhost`)'
+      - 'traefik.http.routers.dashboard.service=api@internal'
+
+  keycloak:
+    image: keycloak/keycloak:26.3
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_DB: dev-mem
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      SECRET: somerandomsecret
+      KC_HEALTH_ENABLED: true
+      # Simple hostname configuration for subdomain
+      KC_HOSTNAME: keycloak.localhost
+      KC_PROXY: edge
+      KC_HTTP_ENABLED: true
+    volumes:
+      - ./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.keycloak.rule=Host(`keycloak.localhost`)'
+      - 'traefik.http.services.keycloak.loadbalancer.server.port=8080'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          '[ -f /tmp/HealthCheck.java ] || echo "public class HealthCheck { public static void main(String[] args) throws java.lang.Throwable { java.net.URI uri = java.net.URI.create(args[0]); System.exit(java.net.HttpURLConnection.HTTP_OK == ((java.net.HttpURLConnection)uri.toURL().openConnection()).getResponseCode() ? 0 : 1); } }" > /tmp/HealthCheck.java && java /tmp/HealthCheck.java http://localhost:9000/health/live',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   krakend:
     image: krakend:watch
     container_name: ${APP_NAME}_krakend
@@ -14,7 +62,7 @@ services:
     working_dir: /app
     volumes:
       - ./registry:/app
-      - /var/run/docker.sock.raw:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./config/krakend:/krakend/
     env_file: .env
     command: 'npm run start:dev'
