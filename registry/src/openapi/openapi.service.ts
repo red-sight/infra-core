@@ -1,18 +1,18 @@
-import { Injectable } from "@nestjs/common";
-import { ServiceInfo } from "../types";
-import axios from "axios";
-import { AxiosError } from "axios";
+import { Injectable } from '@nestjs/common';
+import { ServiceInfo } from '../types';
+import axios from 'axios';
+import { AxiosError } from 'axios';
+import { Swagger } from '@atlassian/atlassian-openapi';
 
 @Injectable()
 export class OpenapiService {
   async fetchSpec(service: ServiceInfo) {
-    console.log("service", service);
     try {
-      const res = await axios({
+      const res = await axios<Swagger.SwaggerV3>({
         url: `http://${service.ip}:${service.port}/${service.oasEndpoint}`,
         timeout: 3000,
       });
-      console.dir(res.data, { depth: null, colors: true });
+      return res.data;
     } catch (e) {
       if (e instanceof AxiosError) {
         console.error(e.toJSON());
@@ -20,7 +20,5 @@ export class OpenapiService {
         console.error(e);
       }
     }
-
-    // console.log("OpenApi spec", res.data);
   }
 }

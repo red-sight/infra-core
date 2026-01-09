@@ -1,5 +1,5 @@
-import { Module } from "@nestjs/common";
-import { OpenapiService } from "./openapi.service";
+import { Module } from '@nestjs/common';
+import { OpenapiService } from './openapi.service';
 
 @Module({
   providers: [OpenapiService],

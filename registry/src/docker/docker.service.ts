@@ -1,8 +1,8 @@
-import { Injectable } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
-import Docker from "dockerode";
-import { ServiceInfo } from "../types";
+import Docker from 'dockerode';
+import { ServiceInfo } from '../types';
 
 @Injectable()
 export class DockerService {
@@ -10,8 +10,8 @@ export class DockerService {
   networkName: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.docker = new Docker({ socketPath: "/var/run/docker.sock" });
-    this.networkName = this.configService.getOrThrow("APP_NAME");
+    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    this.networkName = this.configService.getOrThrow('APP_NAME');
   }
 
   // async watch() {
@@ -29,16 +29,16 @@ export class DockerService {
 
     containers.forEach(c => {
       const network = c.NetworkSettings.Networks[this.networkName];
-      const serviceName = c.Labels["infra.name"];
-      if (network && serviceName && c.Labels["infra.enabled"] === "true") {
+      const serviceName = c.Labels['infra.name'];
+      if (network && serviceName && c.Labels['infra.enabled'] === 'true') {
         services.push({
           name: serviceName,
           ip: network.IPAddress,
-          port: c.Labels["infra.port"]
-            ? parseInt(c.Labels["infra.port"])
+          port: c.Labels['infra.port']
+            ? parseInt(c.Labels['infra.port'])
             : 3000,
-          version: c.Labels["infra.version"] ?? "1",
-          oasEndpoint: c.Labels["infra.oas_endpoint"] ?? "openapi",
+          version: c.Labels['infra.version'] ?? '1',
+          oasEndpoint: c.Labels['infra.oas_endpoint'] ?? 'openapi',
         });
       }
     });

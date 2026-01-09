@@ -1,17 +1,17 @@
-import { Module, OnModuleInit } from "@nestjs/common";
-import { MainService } from "./main.service";
-import { DockerModule } from "../docker/docker.module";
-import { OpenapiModule } from "../openapi/openapi.module";
+import { Module, OnModuleInit } from '@nestjs/common';
+import { MainService } from './main.service';
+import { DockerModule } from '../docker/docker.module';
+import { OpenapiModule } from '../openapi/openapi.module';
+import { GateModule } from '../gate/gate.module';
 
 @Module({
   providers: [MainService],
-  imports: [DockerModule, OpenapiModule],
+  imports: [DockerModule, OpenapiModule, GateModule],
 })
 export class MainModule implements OnModuleInit {
   constructor(private readonly mainService: MainService) {}
 
   async onModuleInit() {
-    const containers = await this.mainService.listAllServices();
-    console.dir(containers, { depth: null, colors: true });
+    await this.mainService.bootstrap();
   }
 }

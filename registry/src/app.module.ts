@@ -5,6 +5,7 @@ import { DockerModule } from './docker/docker.module';
 import { ConfigModule } from '@nestjs/config';
 import { MainModule } from './main/main.module';
 import { OpenapiModule } from './openapi/openapi.module';
+import { GateModule } from './gate/gate.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { OpenapiModule } from './openapi/openapi.module';
     DockerModule,
     MainModule,
     OpenapiModule,
+    GateModule,
   ],
   controllers: [AppController],
   providers: [AppService],
