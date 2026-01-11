@@ -55,6 +55,14 @@ services:
     ports:
       - '$API_GATEWAY_PORT:8080'
     command: ['run', '--config', '/etc/krakend/krakend.json']
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.be.rule=Host(`localhost`) && PathPrefix(`/api`)
+      - traefik.http.routers.be.entrypoints=http
+      - traefik.http.middlewares.be-stripprefix.stripprefix.prefixes=/api
+      - traefik.http.routers.be.middlewares=be-stripprefix,oidc-auth-api@file
+      - traefik.http.services.be.loadbalancer.server.port=$API_GATEWAY_PORT
+      - traefik.http.middlewares.oidc.plugin.traefik-oidc-auth.headers.accessToken=Authorization
 
   registry:
     image: node:24

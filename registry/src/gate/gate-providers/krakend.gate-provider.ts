@@ -3,6 +3,7 @@ import { ServiceInfo } from '../../types';
 import { GateProvider } from './gate-provider';
 import { writeFile } from 'node:fs/promises';
 import {
+  KrakendAuthAlg,
   KrakendConfig,
   KrakendEndpoint,
   KrakendHttpMethod,
@@ -26,6 +27,8 @@ export class KrakendGateProvider extends GateProvider {
 
       const host = `http://${service.ip}:${service.port}`;
 
+      // console.dir(oas, { depth: null, colors: true });
+
       Object.keys(oas.paths).forEach(path => {
         const endpoint = `/${service.name}${path}`;
 
@@ -43,6 +46,7 @@ export class KrakendGateProvider extends GateProvider {
 
           const endpointConfig: KrakendEndpoint = {
             endpoint,
+            input_headers: ['Authorization', 'user-agent'],
             method,
             backend: [
               {
@@ -51,8 +55,23 @@ export class KrakendGateProvider extends GateProvider {
                 method,
               },
             ],
+            extra_config: {},
           };
 
+          const oasPathMethod = oas.paths[path][m] as Swagger.Operation;
+
+          if (oasPathMethod['x-public'] !== 'true') {
+            endpointConfig.extra_config = {
+              ...endpointConfig.extra_config,
+              'auth/validator': {
+                alg: KrakendAuthAlg.RS256,
+                jwk_url:
+                  'http://keycloak:8080/realms/dev-realm/protocol/openid-connect/certs',
+                disable_jwk_security: true,
+                operation_debug: true,
+              },
+            };
+          }
           if (existingEndpoint) Object.assign(existingEndpoint, endpointConfig);
           else krakendConfig.endpoints.push(endpointConfig);
         });

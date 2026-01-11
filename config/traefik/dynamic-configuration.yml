@@ -20,9 +20,10 @@ http:
             ClientSecret: "{{ env "CLIENT_SECRET" }}"
             UsePkce: false
           UnauthorizedBehavior: Unauthorized
+          BypassAuthenticationRule:  "PathRegexp(`.*/public/.*`)"
           Scopes: ["openid", "profile", "email"]
           Headers:
-            - Name: 'Token'
+            - Name: 'Authorization'
               Value: "{{`Bearer {{ .accessToken }}`}}"
             - Name: 'X-User-Id'
               Value: "{{`{{ .claims.sub }}`}}"

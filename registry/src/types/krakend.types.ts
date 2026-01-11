@@ -171,7 +171,7 @@ export interface KrakendAuthValidator {
   operation_debug?: boolean;
   propagate_claims?: string[];
   propagate_claims_preserve_array?: boolean;
-  roles: string[];
+  roles?: string[];
   roles_key?: string;
   roles_key_is_nested?: boolean;
   scopes?: string;
