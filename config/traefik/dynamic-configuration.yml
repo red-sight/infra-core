@@ -5,8 +5,8 @@ http:
         traefik-oidc-auth:
           Secret: "{{ env "OIDC_PLUGIN_SECRET" }}"
           Provider:
-            Url: "http://keycloak.localhost/realms/dev-realm"
-            ClientId: "fe"
+            Url: "{{ env "KC_PROTOCOL" }}://{{ env "KC_HOSTNAME" }}/realms/{{ env "APP_NAME" }}"
+            ClientId: "{{ env "DEMO_REALM_CLIENT_ID" }}"
             ClientSecret: "{{ env "CLIENT_SECRET" }}"
             UsePkce: false
           Scopes: ["openid", "profile", "email"]
@@ -15,8 +15,8 @@ http:
         traefik-oidc-auth:
           Secret: "{{ env "OIDC_PLUGIN_SECRET" }}"
           Provider:
-            Url: "http://keycloak.localhost/realms/dev-realm"
-            ClientId: "fe"
+            Url: "{{ env "KC_PROTOCOL" }}://{{ env "KC_HOSTNAME" }}/realms/{{ env "APP_NAME" }}"
+            ClientId: "{{ env "DEMO_REALM_CLIENT_ID" }}"
             ClientSecret: "{{ env "CLIENT_SECRET" }}"
             UsePkce: false
           UnauthorizedBehavior: Unauthorized
@@ -25,13 +25,13 @@ http:
           Headers:
             - Name: 'Authorization'
               Value: "{{`Bearer {{ .accessToken }}`}}"
-            - Name: 'X-User-Id'
-              Value: "{{`{{ .claims.sub }}`}}"
-            - Name: X-Acr
-              Value: "{{`{{ .claims.acr }}`}}"
-            - Name: X-Claims
-              Value: "{{`{{ . }}`}}"
-            - Name: X-Realm-Roles
-              Value: "{{"{{range $i, $e := .claims.realm_access.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"
-            - Name: X-Client-Roles
-              Value: "{{"{{range $i, $e := .claims.resource_access.fe.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"
+            # - Name: 'X-User-Id'
+            #   Value: "{{`{{ .claims.sub }}`}}"
+            # - Name: X-Acr
+            #   Value: "{{`{{ .claims.acr }}`}}"
+            # - Name: X-Claims
+            #   Value: "{{`{{ . }}`}}"
+            # - Name: X-Realm-Roles
+            #   Value: "{{"{{range $i, $e := .claims.realm_access.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"
+            # - Name: X-Client-Roles
+            #   Value: "{{"{{range $i, $e := .claims.resource_access.fe.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"

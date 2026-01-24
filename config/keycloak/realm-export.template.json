@@ -1,9 +1,9 @@
 {
-  "realm": "dev-realm",
+  "realm": "${REALM}",
   "enabled": true,
   "clients": [
     {
-      "clientId": "fe",
+      "clientId": "${DEMO_REALM_CLIENT_ID}",
       "name": "Frontend app",
       "description": "",
       "rootUrl": "",
@@ -13,9 +13,9 @@
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "mDdKXKOO8FVOiuJpcZzTJfWxt8MHbuG6",
-      "redirectUris": ["http://localhost/oidc/callback"],
-      "webOrigins": ["http://localhost"],
+      "secret": "${DEMO_REALM_SECRET}",
+      "redirectUris": ["${FRONTEND_PROTOCOL}://${FRONTEND_HOST}/oidc/callback"],
+      "webOrigins": ["${FRONTEND_PROTOCOL}://${FRONTEND_HOST}"],
       "standardFlowEnabled": true,
       "frontchannelLogout": true,
       "protocol": "openid-connect",
@@ -51,16 +51,16 @@
   ],
   "users": [
     {
-      "username": "testuser",
+      "username": "${DEMO_REALM_TEST_USER_LOGIN}",
       "enabled": true,
       "emailVerified": true,
-      "email": "testuser@test.com",
-      "firstName": "Dmitrii",
-      "lastName": "Malakhov",
+      "email": "${DEMO_REALM_TEST_USER_EMAIL}",
+      "firstName": "Test",
+      "lastName": "User",
       "credentials": [
         {
           "type": "password",
-          "value": "password"
+          "value": "${DEMO_REALM_TEST_USER_PASSWORD}"
         }
       ],
       "realmRoles": ["user", "offline_access", "default-roles-dev-realm"]

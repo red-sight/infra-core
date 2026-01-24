@@ -1,10 +1,40 @@
 # Installation
 
-- Create .env file and fill it with the minimum required variables:
+- Create .env file and fill it with the minimum required variables (local dev example below):
 
   ```
-  APP_NAME=infra
   API_GATEWAY_PORT=8080
+  APP_NAME=infra
+
+  REALM=demo
+  CLIENT_ID=traefik-forward-auth
+  CLIENT_SECRET=mDdKXKOO8FVOiuJpcZzTJfWxt8MHbuG6
+  OIDC_PLUGIN_SECRET=asjhu76215hgjfJHFUFJRUYHhgvjnhjJ
+
+  # Keycloak demo realm config
+  DEMO_REALM_SECRET=mDdKXKOO8FVOiuJpcZzTJfWxt8MHbuG6
+  DEMO_REALM_TEST_USER_LOGIN=testuser
+  DEMO_REALM_TEST_USER_EMAIL=testuser@test.com
+  DEMO_REALM_TEST_USER_PASSWORD=password
+  DEMO_REALM_CLIENT_ID=fe
+
+  #Keycloak config
+  KC_BOOTSTRAP_ADMIN_USERNAME=admin
+  KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+  KC_SECRET=somerandomsecret
+  KC_HEALTH_ENABLED=true
+  KC_PROTOCOL=http
+  KC_HOSTNAME=keycloak.localhost
+  KC_PROXY=edge
+  KC_HTTP_ENABLED=true
+
+  FRONTEND_HOST=localhost
+  FRONTEND_PROTOCOL=http
+
+  #Postgres
+  POSTGRES_USER=postgres
+  POSTGRES_PASSWORD=postgres
+  POSTGRES_DB=keycloak
   ```
 
 - Build a local KrakenD watch Docker image

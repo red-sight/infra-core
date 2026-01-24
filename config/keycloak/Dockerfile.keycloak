@@ -1,0 +1,20 @@
+# Build
+FROM alpine:latest AS builder
+
+ARG REALM
+ARG DEMO_REALM_CLIENT_ID
+ARG DEMO_REALM_SECRET
+ARG FRONTEND_HOST
+ARG FRONTEND_PROTOCOL
+ARG DEMO_REALM_TEST_USER_LOGIN
+ARG DEMO_REALM_TEST_USER_EMAIL
+ARG DEMO_REALM_TEST_USER_PASSWORD
+
+RUN apk add --no-cache gettext
+COPY ./realm-export.template.json /
+RUN envsubst < realm-export.template.json > realm-export.json
+
+# Bake
+FROM keycloak/keycloak:26.3
+COPY --from=builder realm-export.json /opt/keycloak/data/import/realm-export.json
+

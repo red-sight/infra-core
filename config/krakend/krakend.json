@@ -1,49 +1,5 @@
 {
   "$schema": "https://www.krakend.io/schema/v2.12/krakend.json",
   "version": 3,
-  "endpoints": [
-    {
-      "endpoint": "/client1/v3/hello",
-      "input_headers": [
-        "Authorization",
-        "user-agent"
-      ],
-      "method": "GET",
-      "backend": [
-        {
-          "url_pattern": "/v3/hello",
-          "host": [
-            "http://172.19.0.6:3000"
-          ],
-          "method": "GET"
-        }
-      ],
-      "extra_config": {
-        "auth/validator": {
-          "alg": "RS256",
-          "jwk_url": "http://keycloak:8080/realms/dev-realm/protocol/openid-connect/certs",
-          "disable_jwk_security": true,
-          "operation_debug": true
-        }
-      }
-    },
-    {
-      "endpoint": "/client1/v3/public/test",
-      "input_headers": [
-        "Authorization",
-        "user-agent"
-      ],
-      "method": "GET",
-      "backend": [
-        {
-          "url_pattern": "/v3/public/test",
-          "host": [
-            "http://172.19.0.6:3000"
-          ],
-          "method": "GET"
-        }
-      ],
-      "extra_config": {}
-    }
-  ]
+  "endpoints": []
 }
