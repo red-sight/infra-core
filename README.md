@@ -1,4 +1,8 @@
-# Installation
+# Infra
+
+The project is in the development state, do not use this in the production.
+
+## Installation
 
 - Create .env file and fill it with the minimum required variables (local dev example below):
 
@@ -50,7 +54,7 @@
   docker compose up
   ```
 
-# API service registration
+## API service registration
 
 The API service should be started as a container in the same docker network and have docker label:
 
@@ -58,7 +62,7 @@ The API service should be started as a container in the same docker network and 
 infra.enabled=true
 ```
 
-# Docker labels
+## Docker labels
 
 - enable\*
 

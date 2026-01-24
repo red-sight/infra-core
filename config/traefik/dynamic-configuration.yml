@@ -25,13 +25,3 @@ http:
           Headers:
             - Name: 'Authorization'
               Value: "{{`Bearer {{ .accessToken }}`}}"
-            # - Name: 'X-User-Id'
-            #   Value: "{{`{{ .claims.sub }}`}}"
-            # - Name: X-Acr
-            #   Value: "{{`{{ .claims.acr }}`}}"
-            # - Name: X-Claims
-            #   Value: "{{`{{ . }}`}}"
-            # - Name: X-Realm-Roles
-            #   Value: "{{"{{range $i, $e := .claims.realm_access.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"
-            # - Name: X-Client-Roles
-            #   Value: "{{"{{range $i, $e := .claims.resource_access.fe.roles}}{{if $i}},{{end}}{{$e}}{{end}}"}}"

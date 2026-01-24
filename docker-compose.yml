@@ -1,6 +1,7 @@
 services:
   traefik:
     image: traefik:v3.6.2
+    container_name: ${APP_NAME}_traefik
     ports:
       - '80:80'
       - '8081:8080'
@@ -13,6 +14,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml
       - ./config/traefik/dynamic-configuration.yml:/etc/traefik/dynamic-configuration.yml
+      - traefik-plugins:/plugins-storage
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://localhost:8080/ping']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     labels:
       - 'traefik.enable=true'
       - 'traefik.http.routers.dashboard.rule=Host(`dashboard.localhost`)'
@@ -48,6 +56,8 @@ services:
       - 'traefik.http.services.keycloak.loadbalancer.server.port=8080'
     command: ['start-dev', '--import-realm']
     depends_on:
+      traefik:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
@@ -68,6 +78,9 @@ services:
     ports:
       - '$API_GATEWAY_PORT:8080'
     command: ['run', '--config', '/etc/krakend/krakend.json']
+    depends_on:
+      traefik:
+        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.be.rule=Host(`localhost`) && PathPrefix(`/api`)
@@ -86,6 +99,9 @@ services:
       - ./config/krakend:/krakend/
     env_file: .env
     command: 'npm run start:dev'
+    depends_on:
+      traefik:
+        condition: service_healthy
 
   postgres:
     image: postgres:18.1-alpine
@@ -98,6 +114,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - '5433:5432'
+    depends_on:
+      traefik:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD-SHELL
@@ -115,3 +134,4 @@ networks:
 volumes:
   postgres:
     name: ${APP_NAME}_postgres
+  traefik-plugins:
