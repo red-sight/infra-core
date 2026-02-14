@@ -2,25 +2,44 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import Docker from 'dockerode';
-import { ServiceInfo } from '../types';
+import { IDockerEvent, ServiceInfo } from '../types';
 
 @Injectable()
 export class DockerService {
   docker: Docker;
   networkName: string;
 
+  unwatchedServices: string[];
+
   constructor(private readonly configService: ConfigService) {
     this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
     this.networkName = this.configService.getOrThrow('APP_NAME');
+    this.unwatchedServices = [
+      'traefik',
+      'keycloak',
+      'krakend',
+      'postgres',
+      'registry',
+    ].map(name => `${this.configService.get('APP_NAME')}_${name}`);
   }
 
-  // async watch() {
-  //   const stream = await this.docker.getEvents();
-  //   stream.on('data', (chunk) => {
-  //     const event = JSON.parse(chunk.toString('utf8'));
-  //     console.log('Docker event:', event);
-  //   });
-  // }
+  async watch(cb: () => Promise<void>) {
+    const stream = await this.docker.getEvents({
+      filters: { type: ['container'] },
+    });
+    stream.on('data', (chunk: Buffer) => {
+      const event = JSON.parse(chunk.toString('utf8')) as IDockerEvent;
+      const serviceName = event.Actor?.Attributes?.name;
+      const eventAction = event.Action;
+      if (
+        serviceName &&
+        eventAction &&
+        !this.unwatchedServices.includes(serviceName) &&
+        ['health_status: healthy'].includes(eventAction)
+      )
+        void cb();
+    });
+  }
 
   async listContainers(): Promise<ServiceInfo[]> {
     const containers = await this.docker.listContainers();

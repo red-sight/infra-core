@@ -65,8 +65,7 @@ export class KrakendGateProvider extends GateProvider {
               ...endpointConfig.extra_config,
               'auth/validator': {
                 alg: KrakendAuthAlg.RS256,
-                jwk_url:
-                  'http://keycloak:8080/realms/dev-realm/protocol/openid-connect/certs',
+                jwk_url: `http://keycloak:8080/realms/${process.env['APP_NAME']}/protocol/openid-connect/certs`,
                 disable_jwk_security: true,
                 operation_debug: true,
               },

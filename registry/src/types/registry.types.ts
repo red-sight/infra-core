@@ -6,3 +6,12 @@ export interface ServiceInfo {
   oasEndpoint?: string;
   healthEndpoint?: string;
 }
+
+export interface IDockerEvent {
+  Actor?: {
+    Attributes?: {
+      name?: string;
+    };
+  };
+  Action?: string;
+}
