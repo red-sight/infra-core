@@ -114,15 +114,15 @@ async function main() {
     console.log(`Created API resource "${API_RESOURCE_INDICATOR}".`);
   }
 
-  // --- Add admin user to t-admin organization ---
-  const { data: members } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/organizations/t-admin/users');
+  // --- Add admin user to t-default organization (required for admin console access) ---
+  const { data: members } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/organizations/t-default/users');
   const isMember = Array.isArray(members) && members.some(m => m.id === userId);
   if (!isMember) {
-    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', '/organizations/t-admin/users', { userIds: [userId] });
-    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/organizations/t-admin/users/${userId}/roles`, { organizationRoleIds: ['admin'] });
-    console.log('Admin user added to t-admin organization with admin role.');
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', '/organizations/t-default/users', { userIds: [userId] });
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/organizations/t-default/users/${userId}/roles`, { organizationRoleIds: ['admin'] });
+    console.log('Admin user added to t-default organization with admin role.');
   } else {
-    console.log('Admin user already in t-admin organization.');
+    console.log('Admin user already in t-default organization.');
   }
 
   // --- Mark onboarding complete (admin tenant, port 3002) ---
