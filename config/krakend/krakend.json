@@ -1,5 +1,150 @@
 {
   "$schema": "https://www.krakend.io/schema/v2.12/krakend.json",
   "version": 3,
-  "endpoints": []
+  "endpoints": [
+    {
+      "endpoint": "/service-a/v3/hello",
+      "input_headers": [
+        "Authorization",
+        "user-agent",
+        "X-User-Id",
+        "X-Roles",
+        "X-User-Email",
+        "X-User-Email-Verified",
+        "X-User-Fullname",
+        "X-User-Firstname",
+        "X-User-Lastname",
+        "X-Username",
+        "X-Scope"
+      ],
+      "method": "GET",
+      "backend": [
+        {
+          "url_pattern": "/v3/hello",
+          "host": [
+            "http://172.19.0.7:3000"
+          ],
+          "method": "GET"
+        }
+      ],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://keycloak:8080/realms/infra/protocol/openid-connect/certs",
+          "disable_jwk_security": true,
+          "operation_debug": true,
+          "propagate_claims": [
+            [
+              "sub",
+              "X-User-Id"
+            ],
+            [
+              "realm_access.roles",
+              "X-Roles"
+            ],
+            [
+              "email",
+              "X-User-Email"
+            ],
+            [
+              "email_verified",
+              "X-User-Email-Verified"
+            ],
+            [
+              "name",
+              "X-User-Fullname"
+            ],
+            [
+              "given_name",
+              "X-User-Firstname"
+            ],
+            [
+              "family_name",
+              "X-User-Lastname"
+            ],
+            [
+              "preferred_username",
+              "X-Username"
+            ],
+            [
+              "scope",
+              "X-Scope"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "endpoint": "/service-a/me",
+      "input_headers": [
+        "Authorization",
+        "user-agent",
+        "X-User-Id",
+        "X-Roles",
+        "X-User-Email",
+        "X-User-Email-Verified",
+        "X-User-Fullname",
+        "X-User-Firstname",
+        "X-User-Lastname",
+        "X-Username",
+        "X-Scope"
+      ],
+      "method": "GET",
+      "backend": [
+        {
+          "url_pattern": "/me",
+          "host": [
+            "http://172.19.0.7:3000"
+          ],
+          "method": "GET"
+        }
+      ],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://keycloak:8080/realms/infra/protocol/openid-connect/certs",
+          "disable_jwk_security": true,
+          "operation_debug": true,
+          "propagate_claims": [
+            [
+              "sub",
+              "X-User-Id"
+            ],
+            [
+              "realm_access.roles",
+              "X-Roles"
+            ],
+            [
+              "email",
+              "X-User-Email"
+            ],
+            [
+              "email_verified",
+              "X-User-Email-Verified"
+            ],
+            [
+              "name",
+              "X-User-Fullname"
+            ],
+            [
+              "given_name",
+              "X-User-Firstname"
+            ],
+            [
+              "family_name",
+              "X-User-Lastname"
+            ],
+            [
+              "preferred_username",
+              "X-Username"
+            ],
+            [
+              "scope",
+              "X-Scope"
+            ]
+          ]
+        }
+      }
+    }
+  ]
 }

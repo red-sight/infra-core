@@ -25,6 +25,7 @@ services:
       - 'traefik.enable=true'
       - 'traefik.http.routers.dashboard.rule=Host(`dashboard.localhost`)'
       - 'traefik.http.routers.dashboard.service=api@internal'
+      - 'traefik.http.routers.dashboard.entrypoints=http'
 
   keycloak:
     image: keycloak-local
@@ -83,7 +84,7 @@ services:
         condition: service_healthy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.be.rule=Host(`localhost`) && PathPrefix(`/api`)
+      - traefik.http.routers.be.rule=Host(`${FRONTEND_HOST}`) && PathPrefix(`/api`)
       - traefik.http.routers.be.entrypoints=http
       - traefik.http.middlewares.be-stripprefix.stripprefix.prefixes=/api
       - traefik.http.routers.be.middlewares=be-stripprefix,oidc-auth-api@file

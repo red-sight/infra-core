@@ -9,9 +9,7 @@ export interface ServiceInfo {
 
 export interface IDockerEvent {
   Actor?: {
-    Attributes?: {
-      name?: string;
-    };
+    Attributes?: Record<string, string>;
   };
   Action?: string;
 }

@@ -8,37 +8,34 @@ import { IDockerEvent, ServiceInfo } from '../types';
 export class DockerService {
   docker: Docker;
   networkName: string;
-
-  unwatchedServices: string[];
+  appName: string;
 
   constructor(private readonly configService: ConfigService) {
     this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
     this.networkName = this.configService.getOrThrow('APP_NAME');
-    this.unwatchedServices = [
-      'traefik',
-      'keycloak',
-      'krakend',
-      'postgres',
-      'registry',
-    ].map(name => `${this.configService.get('APP_NAME')}_${name}`);
+    this.appName = this.configService.getOrThrow('APP_NAME');
   }
 
-  async watch(cb: () => Promise<void>) {
+  async watch(): Promise<NodeJS.ReadableStream> {
     const stream = await this.docker.getEvents({
       filters: { type: ['container'] },
     });
     stream.on('data', (chunk: Buffer) => {
       const event = JSON.parse(chunk.toString('utf8')) as IDockerEvent;
-      const serviceName = event.Actor?.Attributes?.name;
+      const serviceName = event.Actor?.Attributes?.[`${this.appName}.name`];
+      const serviceEnabled =
+        event.Actor?.Attributes?.[`${this.appName}.enabled`];
       const eventAction = event.Action;
       if (
+        serviceEnabled &&
         serviceName &&
         eventAction &&
-        !this.unwatchedServices.includes(serviceName) &&
         ['health_status: healthy'].includes(eventAction)
-      )
-        void cb();
+      ) {
+        stream.emit('healthy', serviceName);
+      }
     });
+    return stream;
   }
 
   async listContainers(): Promise<ServiceInfo[]> {

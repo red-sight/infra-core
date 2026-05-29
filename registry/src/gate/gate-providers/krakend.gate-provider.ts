@@ -46,7 +46,19 @@ export class KrakendGateProvider extends GateProvider {
 
           const endpointConfig: KrakendEndpoint = {
             endpoint,
-            input_headers: ['Authorization', 'user-agent'],
+            input_headers: [
+              'Authorization',
+              'user-agent',
+              'X-User-Id',
+              'X-Roles',
+              'X-User-Email',
+              'X-User-Email-Verified',
+              'X-User-Fullname',
+              'X-User-Firstname',
+              'X-User-Lastname',
+              'X-Username',
+              'X-Scope',
+            ],
             method,
             backend: [
               {
@@ -55,7 +67,6 @@ export class KrakendGateProvider extends GateProvider {
                 method,
               },
             ],
-            extra_config: {},
           };
 
           const oasPathMethod = oas.paths[path][m] as Swagger.Operation;
@@ -68,6 +79,17 @@ export class KrakendGateProvider extends GateProvider {
                 jwk_url: `http://keycloak:8080/realms/${process.env['APP_NAME']}/protocol/openid-connect/certs`,
                 disable_jwk_security: true,
                 operation_debug: true,
+                propagate_claims: [
+                  ['sub', 'X-User-Id'],
+                  ['realm_access.roles', 'X-Roles'],
+                  ['email', 'X-User-Email'],
+                  ['email_verified', 'X-User-Email-Verified'],
+                  ['name', 'X-User-Fullname'],
+                  ['given_name', 'X-User-Firstname'],
+                  ['family_name', 'X-User-Lastname'],
+                  ['preferred_username', 'X-Username'],
+                  ['scope', 'X-Scope'],
+                ],
               },
             };
           }

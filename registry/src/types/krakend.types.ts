@@ -151,7 +151,7 @@ export interface KrakendAuthSigner {
 }
 
 export interface KrakendAuthValidator {
-  alg: KrakendAuthAlg;
+  alg?: KrakendAuthAlg;
   audience?: string[];
   auth_header_name?: string;
   cache?: boolean;
@@ -169,7 +169,7 @@ export interface KrakendAuthValidator {
   key_identify_strategy?: 'kid' | 'x5t' | 'x5t#S256' | 'kid_x5t';
   leeway?: string;
   operation_debug?: boolean;
-  propagate_claims?: string[];
+  propagate_claims?: string[][];
   propagate_claims_preserve_array?: boolean;
   roles?: string[];
   roles_key?: string;
