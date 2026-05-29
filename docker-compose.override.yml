@@ -29,6 +29,11 @@ services:
       postgres:
         condition: service_healthy
 
+  logto-init:
+    depends_on:
+      logto:
+        condition: service_healthy
+
   krakend:
     depends_on:
       logto:

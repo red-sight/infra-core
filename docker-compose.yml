@@ -13,7 +13,11 @@ services:
     image: traefik:v3.7
     restart: unless-stopped
     networks:
-      - infra
+      infra:
+        aliases:
+          - ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+          - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+          - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -98,6 +102,19 @@ services:
       traefik.http.routers.logto-admin.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
       traefik.http.routers.logto-admin.service: "logto-admin"
       traefik.http.services.logto-admin.loadbalancer.server.port: "3002"
+
+  logto-init:
+    build: ./scripts/logto
+    networks:
+      - infra
+    environment:
+      LOGTO_ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      DB_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_LOGTO_DB:-logto}
+      ADMIN_USERNAME: ${INFRA_LOGTO_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${INFRA_LOGTO_ADMIN_PASSWORD:?INFRA_LOGTO_ADMIN_PASSWORD is required}
+      API_RESOURCE_INDICATOR: ${INFRA_LOGTO_API_RESOURCE_ID:?INFRA_LOGTO_API_RESOURCE_ID is required}
+    restart: on-failure
 
   krakend:
     image: krakend:latest
