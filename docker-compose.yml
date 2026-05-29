@@ -1,0 +1,119 @@
+name: infra
+
+networks:
+  infra:
+    name: ${INFRA_NETWORK_NAME:-infra}
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+  traefik:
+    image: traefik:v3.7
+    restart: unless-stopped
+    networks:
+      - infra
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - --providers.docker=true
+      - --providers.docker.network=${INFRA_NETWORK_NAME:-infra}
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.dashboard=true
+      - --ping=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.traefik-dashboard.rule: "Host(`traefik.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.traefik-dashboard.service: "api@internal"
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    networks:
+      - infra
+    environment:
+      POSTGRES_USER: ${INFRA_PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${INFRA_PG_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${INFRA_PG_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - infra
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  logto:
+    image: svhd/logto:latest
+    restart: unless-stopped
+    networks:
+      - infra
+    environment:
+      DB_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_LOGTO_DB:-logto}
+      PORT: 3001
+      ADMIN_PORT: 3002
+      ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      TRUST_PROXY_HEADER: "1"
+    entrypoint: ["sh", "-c", "npx @logto/cli db seed --db-url $$DB_URL 2>/dev/null; npm start"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/status || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.logto.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.logto.service: "logto"
+      traefik.http.services.logto.loadbalancer.server.port: "3001"
+      traefik.http.routers.logto-admin.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.logto-admin.service: "logto-admin"
+      traefik.http.services.logto-admin.loadbalancer.server.port: "3002"
+
+  krakend:
+    image: krakend:latest
+    restart: unless-stopped
+    networks:
+      - infra
+    volumes:
+      - ./config/krakend:/etc/krakend:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.krakend.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && PathPrefix(`/${INFRA_API_ROUTE:-api}`)"
+      traefik.http.routers.krakend.service: "krakend"
+      traefik.http.services.krakend.loadbalancer.server.port: "8080"

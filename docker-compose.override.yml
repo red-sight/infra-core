@@ -1,0 +1,35 @@
+services:
+  traefik:
+    ports:
+      - "8080:8080"
+    command:
+      - --providers.docker=true
+      - --providers.docker.network=${INFRA_NETWORK_NAME:-infra}
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --ping=true
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  logto:
+    ports:
+      - "3001:3001"
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  krakend:
+    depends_on:
+      logto:
+        condition: service_healthy
