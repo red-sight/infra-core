@@ -114,11 +114,23 @@ async function main() {
     console.log(`Created API resource "${API_RESOURCE_INDICATOR}".`);
   }
 
+  // --- Add admin user to t-admin organization ---
+  const { data: members } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/organizations/t-admin/users');
+  const isMember = Array.isArray(members) && members.some(m => m.id === userId);
+  if (!isMember) {
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', '/organizations/t-admin/users', { userIds: [userId] });
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/organizations/t-admin/users/${userId}/roles`, { organizationRoleIds: ['admin'] });
+    console.log('Admin user added to t-admin organization with admin role.');
+  } else {
+    console.log('Admin user already in t-admin organization.');
+  }
+
   // --- Mark onboarding complete (admin tenant, port 3002) ---
   const { data: consoleCfg } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/configs/admin-console');
-  if (!consoleCfg.signInExperienceCustomized) {
+  if (!consoleCfg.signInExperienceCustomized || !consoleCfg.organizationCreated) {
     await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'PATCH', '/configs/admin-console', {
       signInExperienceCustomized: true,
+      organizationCreated: true,
     });
     console.log('Onboarding marked complete.');
   } else {
