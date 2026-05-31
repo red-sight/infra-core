@@ -1,17 +1,140 @@
 {
   "$schema": "https://www.krakend.io/schema/v2.8/krakend.json",
-  "version": 3,
-  "name": "Infra API Gateway",
-  "timeout": "10000ms",
   "cache_ttl": "300s",
-  "output_encoding": "json",
+  "endpoints": [
+    {
+      "backend": [
+        {
+          "encoding": "json",
+          "host": [
+            "http://service-a:3000"
+          ],
+          "method": "GET",
+          "url_pattern": "/items"
+        }
+      ],
+      "endpoint": "/api/service-a/v1/items",
+      "method": "GET",
+      "output_encoding": "json"
+    },
+    {
+      "backend": [
+        {
+          "encoding": "json",
+          "host": [
+            "http://service-a:3000"
+          ],
+          "method": "POST",
+          "url_pattern": "/items"
+        }
+      ],
+      "endpoint": "/api/service-a/v1/items",
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "audience": [
+            "https://api.app.localhost"
+          ],
+          "disable_jwk_security": true,
+          "jwk_url": "http://auth.app.localhost/oidc/jwks",
+          "propagate_claims": [
+            [
+              "sub",
+              "x-user-id"
+            ],
+            [
+              "roles",
+              "x-user-roles"
+            ],
+            [
+              "scope",
+              "x-user-permissions"
+            ]
+          ],
+          "scopes": [
+            "write:items"
+          ],
+          "scopes_matcher": "all"
+        }
+      },
+      "input_headers": [
+        "Authorization"
+      ],
+      "method": "POST",
+      "output_encoding": "json"
+    },
+    {
+      "backend": [
+        {
+          "encoding": "json",
+          "host": [
+            "http://service-a:3000"
+          ],
+          "method": "GET",
+          "url_pattern": "/items/{id}"
+        }
+      ],
+      "endpoint": "/api/service-a/v1/items/{id}",
+      "method": "GET",
+      "output_encoding": "json"
+    },
+    {
+      "backend": [
+        {
+          "encoding": "json",
+          "host": [
+            "http://service-a:3000"
+          ],
+          "method": "DELETE",
+          "url_pattern": "/items/{id}"
+        }
+      ],
+      "endpoint": "/api/service-a/v1/items/{id}",
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "audience": [
+            "https://api.app.localhost"
+          ],
+          "disable_jwk_security": true,
+          "jwk_url": "http://auth.app.localhost/oidc/jwks",
+          "propagate_claims": [
+            [
+              "sub",
+              "x-user-id"
+            ],
+            [
+              "roles",
+              "x-user-roles"
+            ],
+            [
+              "scope",
+              "x-user-permissions"
+            ]
+          ],
+          "scopes": [
+            "write:items"
+          ],
+          "scopes_matcher": "all"
+        }
+      },
+      "input_headers": [
+        "Authorization"
+      ],
+      "method": "DELETE",
+      "output_encoding": "json"
+    }
+  ],
   "extra_config": {
     "telemetry/logging": {
       "level": "INFO",
       "prefix": "[KRAKEND]",
-      "syslog": false,
-      "stdout": true
+      "stdout": true,
+      "syslog": false
     }
   },
-  "endpoints": []
+  "name": "Infra API Gateway",
+  "output_encoding": "json",
+  "timeout": "10000ms",
+  "version": 3
 }

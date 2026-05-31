@@ -1,1 +1,193 @@
-{"openapi":"3.0.0","paths":{"/items":{"get":{"operationId":"ItemsController_findAll","parameters":[],"responses":{"200":{"description":"","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/Item"}}}}}},"summary":"List all items","tags":["items"],"x-infra-protected":false},"post":{"operationId":"ItemsController_create","parameters":[],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateItemDto"}}}},"responses":{"201":{"description":"","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}}},"security":[{"bearer":[]}],"summary":"Create item","tags":["items"],"x-infra-protected":true,"x-infra-scopes":["write:items"]}},"/items/{id}":{"get":{"operationId":"ItemsController_findOne","parameters":[{"name":"id","required":true,"in":"path","schema":{"type":"number"}}],"responses":{"200":{"description":"","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Item"}}}},"404":{"description":"Not found"}},"summary":"Get item by ID","tags":["items"],"x-infra-protected":false},"delete":{"operationId":"ItemsController_remove","parameters":[{"name":"id","required":true,"in":"path","schema":{"type":"number"}}],"responses":{"204":{"description":""},"404":{"description":"Not found"}},"security":[{"bearer":[]}],"summary":"Delete item","tags":["items"],"x-infra-protected":true,"x-infra-scopes":["write:items"]}}},"info":{"title":"Service A","description":"Demo API service","version":"v1","contact":{}},"tags":[],"servers":[],"components":{"securitySchemes":{"bearer":{"scheme":"bearer","bearerFormat":"JWT","type":"http"}},"schemas":{"Item":{"type":"object","properties":{"id":{"type":"number","example":1},"name":{"type":"string","example":"Widget"},"description":{"type":"string","example":"A useful widget"}},"required":["id","name"]},"CreateItemDto":{"type":"object","properties":{"name":{"type":"string","example":"Widget"},"description":{"type":"string","example":"A useful widget"}},"required":["name"]}}}}
+{
+  "components": {
+    "schemas": {
+      "CreateItemDto": {
+        "properties": {
+          "description": {
+            "example": "A useful widget",
+            "type": "string"
+          },
+          "name": {
+            "example": "Widget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "description": {
+            "example": "A useful widget",
+            "type": "string"
+          },
+          "id": {
+            "example": 1,
+            "type": "number"
+          },
+          "name": {
+            "example": "Widget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "bearerFormat": "JWT (Logto)",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Infra API",
+    "version": "v1"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/service-a/v1/items": {
+      "get": {
+        "operationId": "ItemsController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Item"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [],
+        "summary": "List all items",
+        "tags": [
+          "items"
+        ]
+      },
+      "post": {
+        "operationId": "ItemsController_create",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateItemDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": [
+              "write:items"
+            ]
+          }
+        ],
+        "summary": "Create item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
+    "/api/service-a/v1/items/{id}": {
+      "delete": {
+        "operationId": "ItemsController_remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": [
+              "write:items"
+            ]
+          }
+        ],
+        "summary": "Delete item",
+        "tags": [
+          "items"
+        ]
+      },
+      "get": {
+        "operationId": "ItemsController_findOne",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "security": [],
+        "summary": "Get item by ID",
+        "tags": [
+          "items"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://app.localhost"
+    }
+  ],
+  "tags": []
+}

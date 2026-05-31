@@ -130,6 +130,7 @@ services:
     labels:
       infra.enabled: "true"
       infra.name: service-a
+      infra.port: "3000"
       infra.openapi-route: openapi
       infra.auth.protected: "true"
 

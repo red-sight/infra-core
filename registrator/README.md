@@ -25,6 +25,7 @@ Not yet implemented. This document is the design spec.
 | `INFRA_API_ROUTE` | `api` | API gateway path prefix |
 | `INFRA_LOGTO_API_RESOURCE_ID` | — | Logto API Resource indicator (required) |
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
+| `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
 
 ## Service discovery
 
@@ -180,6 +181,7 @@ A microservice joins Infra by:
 |---|---|---|---|
 | `infra.enabled` | yes | — | must be `true` to be discovered |
 | `infra.name` | yes | — | service identifier, used in gateway routes |
+| `infra.port` | yes | — | internal container port the service listens on |
 | `infra.openapi-route` | no | `openapi` | path where the OpenAPI spec is served |
 | `infra.auth.protected` | no | `true` | default auth requirement for all endpoints |
 
