@@ -38,3 +38,28 @@ services:
     depends_on:
       logto:
         condition: service_healthy
+
+  service-a:
+    build:
+      context: ./service-a
+      target: dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./service-a:/app
+      - /app/node_modules
+
+  registrator:
+    build:
+      context: ./registrator
+      target: dev
+    volumes:
+      - ./registrator:/app
+    depends_on:
+      krakend:
+        condition: service_healthy
+
+  swagger:
+    depends_on:
+      registrator:
+        condition: service_healthy

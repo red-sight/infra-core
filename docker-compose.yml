@@ -116,6 +116,39 @@ services:
       API_RESOURCE_INDICATOR: ${INFRA_LOGTO_API_RESOURCE_ID:?INFRA_LOGTO_API_RESOURCE_ID is required}
     restart: on-failure
 
+  service-a:
+    build: ./service-a
+    restart: unless-stopped
+    networks:
+      - infra
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      infra.enabled: "true"
+      infra.name: service-a
+      infra.openapi-route: openapi
+      infra.auth.protected: "true"
+
+  swagger:
+    image: swaggerapi/swagger-ui
+    restart: unless-stopped
+    networks:
+      - infra
+    environment:
+      SWAGGER_JSON: /specs/openapi.json
+      BASE_URL: /${INFRA_DOCS_ROUTE:-docs}
+    volumes:
+      - ./config/openapi:/specs:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.swagger.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && PathPrefix(`/${INFRA_DOCS_ROUTE:-docs}`)"
+      traefik.http.routers.swagger.service: "swagger"
+      traefik.http.services.swagger.loadbalancer.server.port: "8080"
+
   krakend:
     image: krakend:latest
     restart: unless-stopped
@@ -134,3 +167,27 @@ services:
       traefik.http.routers.krakend.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && PathPrefix(`/${INFRA_API_ROUTE:-api}`)"
       traefik.http.routers.krakend.service: "krakend"
       traefik.http.services.krakend.loadbalancer.server.port: "8080"
+
+  registrator:
+    build: ./registrator
+    restart: unless-stopped
+    networks:
+      - infra
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/krakend:/etc/krakend
+      - ./config/openapi:/specs
+    environment:
+      INFRA_MODE: ${INFRA_MODE:-}
+      INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
+      INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      INFRA_HTTP_OIDC_SUBDOMAIN: ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}
+      INFRA_API_ROUTE: ${INFRA_API_ROUTE:-api}
+      INFRA_LOGTO_API_RESOURCE_ID: ${INFRA_LOGTO_API_RESOURCE_ID}
+      INFRA_REGISTRATOR_RELOAD_DELAY: ${INFRA_REGISTRATOR_RELOAD_DELAY:-5s}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

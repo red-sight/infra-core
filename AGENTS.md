@@ -50,50 +50,25 @@ When suggesting image updates, pin to a specific version. `latest` is acceptable
 |---|---|---|
 | `http://app.localhost` | frontend (user-configured) | — |
 | `http://app.localhost/api` | KrakenD | 8080 |
+| `http://app.localhost/docs` | Swagger UI | 8080 |
 | `http://auth.app.localhost` | Logto OIDC | 3001 |
 | `http://auth-admin.app.localhost` | Logto admin console | 3002 |
 | `http://traefik.app.localhost` | Traefik dashboard (dev only) | — |
 
 All derived from env vars: `INFRA_HTTP_PROTOCOL`, `INFRA_HTTP_BASE_DOMAIN`, `INFRA_HTTP_OIDC_SUBDOMAIN`, `INFRA_API_ROUTE`.
 
-## Registrator design
+## Registrator
 
-The Registrator is a Go service (not yet implemented — planned in `registrator/`).
+A Go service planned in `registrator/`. See [`registrator/README.md`](registrator/README.md) for the full design.
 
-**EnvironmentAdapter interface** — the only part that differs between Compose and Swarm:
+Quick reference — candidate service labels:
 
-```go
-type EnvironmentAdapter interface {
-    WatchServices() <-chan ServiceEvent
-    Mode() string   // "compose" | "swarm"
-}
-
-type ServiceEvent struct {
-    Name    string
-    Port    int
-    Healthy bool
-    Removed bool
-}
-```
-
-- `ComposeAdapter`: subscribes to Docker `container` events, filters `health_status: healthy`
-- `SwarmAdapter`: subscribes to Docker `service` task events, filters task state `running`
-
-Backend address is `http://<service-name>:<port>` in both modes — Docker DNS works the same on bridge and overlay networks.
-
-**Debounce (lazy reload):** timer resets on every new `ServiceEvent`. Fires after `INFRA_REGISTRATOR_RELOAD_DELAY` (default `5s` local, `60s` prod). On fire: fetch OpenAPI, generate KrakenD config, restart KrakenD container.
-
-**Auto-detection:** `GET /info` on Docker socket → `.Swarm.LocalNodeState == "active"` → use `SwarmAdapter`. Overridden by `INFRA_MODE=compose|swarm`.
-
-## Candidate service contract
-
-A microservice must:
-1. Be on the `infra` Docker network
-2. Declare labels: `infra.enabled=true`, `infra.name=<name>`, optionally `infra.openapi-route=<path>` (default: `openapi`)
-3. Expose a Docker healthcheck
-4. Serve an OpenAPI spec at `/<openapi-route>`
-
-Future scope: per-endpoint OpenAPI extension labels (`x-infra-protected`, `x-infra-roles`, `x-infra-scopes`) that the Registrator maps to KrakenD `auth/validator` fields.
+| Label | Required | Default | Description |
+|---|---|---|---|
+| `infra.enabled` | yes | — | must be `true` to be discovered |
+| `infra.name` | yes | — | service identifier |
+| `infra.openapi-route` | no | `openapi` | path where the OpenAPI spec is served |
+| `infra.auth.protected` | no | `true` | default auth requirement for all endpoints |
 
 ## Postgres conventions
 
@@ -103,8 +78,5 @@ In Swarm, Postgres is pinned to a labeled node (`node.labels.infra.postgres == t
 
 ## Open / unresolved
 
-- **Logto headless init**: the mechanism for creating the first admin user and API Resource without the web wizard is not yet confirmed. Needs research into Logto's CLI seed options and Management API bootstrap flow.
-- **Logto startup command**: the `command` in `docker-compose.yml` that seeds the DB and starts the node process needs validation against the actual image internals.
+- **Logto startup command**: the `entrypoint` in `docker-compose.yml` that seeds the DB and starts the node process needs validation against the actual image internals.
 - **Postgres init env vars**: `scripts/postgres/init.sh` references `INFRA_PG_LOGTO_DB` — confirm this env var is available inside `docker-entrypoint-initdb.d` at runtime.
-- **KrakenD restart strategy**: for zero-downtime in Swarm, consider running two KrakenD replicas behind Traefik and doing blue/green at that layer. Out of scope for MVP.
-- **Registrator implementation**: not started. Planned as `registrator/` subdirectory with its own README.

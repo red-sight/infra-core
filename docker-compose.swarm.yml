@@ -45,3 +45,32 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+
+  service-a:
+    image: ${INFRA_SERVICE_A_IMAGE:-service-a:latest}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: start-first
+        failure_action: rollback
+
+  registrator:
+    image: ${INFRA_REGISTRATOR_IMAGE:-registrator:latest}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: start-first
+        failure_action: rollback
+
+  swagger:
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s

@@ -1,0 +1,16 @@
+root = "."
+tmp_dir = "/tmp/air"
+
+[build]
+  cmd = "go build -o /tmp/air/registrator ."
+  bin = "/tmp/air/registrator"
+  delay = 1000
+  exclude_dir = ["tmp"]
+  include_ext = ["go"]
+  kill_delay = "0s"
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true
