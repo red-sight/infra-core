@@ -25,6 +25,7 @@ Not yet implemented. This document is the design spec.
 | `INFRA_API_ROUTE` | `api` | API gateway path prefix |
 | `INFRA_LOGTO_API_RESOURCE_ID` | — | Logto API Resource indicator (required) |
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
+| `INFRA_REGISTRATOR_POLL_INTERVAL` | `30s` | how often to re-fetch specs from registered services and reload if changed (covers in-process restarts in watch/hot-reload mode) |
 | `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
 
 ## Service discovery
@@ -105,7 +106,7 @@ Declared per-operation in the service's OpenAPI spec:
 |---|---|---|---|
 | `x-infra-protected` | `bool` | inherits `infra.auth.protected` Docker label | `false` = public endpoint, no `auth/validator` block generated |
 | `x-infra-scopes` | `string[]` | — | required permissions; generates `scopes` in `auth/validator` |
-| `x-infra-scopes-matcher` | `"all"\|"any"` | `"all"` | scope matching logic |
+| `x-infra-scopes-matcher` | `"all"\|"any"` | `"any"` | scope matching logic — `"any"` (OR) means access if the token contains at least one listed scope; `"all"` (AND) requires every scope to be present |
 
 **Permissions vs roles:** API specs declare required permissions (scopes) only. Roles are Logto-managed groupings — they are not part of the API contract and must not appear in OpenAPI specs.
 

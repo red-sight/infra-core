@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ type Aggregator struct {
 	cfg     Config
 	mu      sync.RWMutex
 	current []byte
+	hash    [32]byte
 }
 
 // New creates an Aggregator with the given configuration.
@@ -40,25 +42,35 @@ func New(cfg Config) *Aggregator {
 	return &Aggregator{cfg: cfg}
 }
 
-// Aggregate fetches specs from all services, merges them, writes to SpecsPath/openapi.json,
-// and caches the result for the HTTP handler.
-func (a *Aggregator) Aggregate(services []ServiceInfo) error {
+// Aggregate fetches specs from all services, merges them, and writes to SpecsPath/openapi.json
+// if the result differs from the last run. Returns true if the spec changed.
+func (a *Aggregator) Aggregate(services []ServiceInfo) (bool, error) {
 	spec := a.buildAggregated(services)
 
 	data, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
-		return fmt.Errorf("openapi: marshal: %w", err)
+		return false, fmt.Errorf("openapi: marshal: %w", err)
+	}
+
+	h := sha256.Sum256(data)
+
+	a.mu.Lock()
+	changed := h != a.hash
+	if changed {
+		a.current = data
+		a.hash = h
+	}
+	a.mu.Unlock()
+
+	if !changed {
+		return false, nil
 	}
 
 	path := filepath.Join(a.cfg.SpecsPath, "openapi.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("openapi: write %s: %w", path, err)
+		return false, fmt.Errorf("openapi: write %s: %w", path, err)
 	}
-
-	a.mu.Lock()
-	a.current = data
-	a.mu.Unlock()
-	return nil
+	return true, nil
 }
 
 // Handler returns an http.Handler serving the current aggregated spec at /openapi.json.
@@ -81,6 +93,7 @@ func (a *Aggregator) Handler() http.Handler {
 func (a *Aggregator) buildAggregated(services []ServiceInfo) map[string]interface{} {
 	mergedPaths := map[string]interface{}{}
 	mergedSchemas := map[string]interface{}{}
+	mergedScopes := map[string]interface{}{} // scope name → description
 	var mergedTags []interface{}
 
 	for _, svc := range services {
@@ -89,12 +102,15 @@ func (a *Aggregator) buildAggregated(services []ServiceInfo) map[string]interfac
 			log.Printf("openapi: skip %s: %v", svc.Name, err)
 			continue
 		}
-		paths, schemas, tags := a.processSpec(svc, raw)
+		paths, schemas, tags, scopes := a.processSpec(svc, raw)
 		for k, v := range paths {
 			mergedPaths[k] = v
 		}
 		for k, v := range schemas {
 			mergedSchemas[k] = v
+		}
+		for k, v := range scopes {
+			mergedScopes[k] = v
 		}
 		mergedTags = append(mergedTags, tags...)
 	}
@@ -102,6 +118,8 @@ func (a *Aggregator) buildAggregated(services []ServiceInfo) map[string]interfac
 	if mergedTags == nil {
 		mergedTags = []interface{}{}
 	}
+
+	oidcBase := fmt.Sprintf("%s://%s.%s", a.cfg.HTTPProtocol, a.cfg.OIDCSubdomain, a.cfg.BaseDomain)
 
 	return map[string]interface{}{
 		"openapi": "3.0.0",
@@ -116,10 +134,17 @@ func (a *Aggregator) buildAggregated(services []ServiceInfo) map[string]interfac
 		"paths": mergedPaths,
 		"components": map[string]interface{}{
 			"securitySchemes": map[string]interface{}{
+				// oauth2 with authorizationCode lets Swagger UI show per-operation scope
+				// requirements as checkboxes and list them on the lock icon popup.
 				"BearerAuth": map[string]interface{}{
-					"type":         "http",
-					"scheme":       "bearer",
-					"bearerFormat": "JWT (Logto)",
+					"type": "oauth2",
+					"flows": map[string]interface{}{
+						"authorizationCode": map[string]interface{}{
+							"authorizationUrl": oidcBase + "/oidc/auth",
+							"tokenUrl":         oidcBase + "/oidc/token",
+							"scopes":           mergedScopes,
+						},
+					},
 				},
 			},
 			"schemas": mergedSchemas,
@@ -151,12 +176,13 @@ func (a *Aggregator) fetchSpec(svc ServiceInfo) (map[string]interface{}, error) 
 	return spec, nil
 }
 
-func (a *Aggregator) processSpec(svc ServiceInfo, raw map[string]interface{}) (paths, schemas map[string]interface{}, tags []interface{}) {
+func (a *Aggregator) processSpec(svc ServiceInfo, raw map[string]interface{}) (paths, schemas map[string]interface{}, tags []interface{}, scopes map[string]interface{}) {
 	version := specVersion(raw)
 	prefix := fmt.Sprintf("/%s/%s/%s", a.cfg.APIRoute, svc.Name, version)
 
 	rawPaths, _ := raw["paths"].(map[string]interface{})
 	paths = make(map[string]interface{}, len(rawPaths))
+	scopes = map[string]interface{}{}
 
 	for rawPath, pathItem := range rawPaths {
 		pathItemMap, ok := pathItem.(map[string]interface{})
@@ -174,7 +200,11 @@ func (a *Aggregator) processSpec(svc ServiceInfo, raw map[string]interface{}) (p
 			if !ok {
 				continue
 			}
-			newItem[method] = processOperation(op, svc.AuthProtected)
+			newOp, opScopes := processOperation(op, svc.AuthProtected)
+			newItem[method] = newOp
+			for _, s := range opScopes {
+				scopes[s] = s // use scope name as its own description
+			}
 		}
 		paths[prefix+rawPath] = newItem
 	}
@@ -189,11 +219,12 @@ func (a *Aggregator) processSpec(svc ServiceInfo, raw map[string]interface{}) (p
 		tags = rawTags
 	}
 
-	return paths, schemas, tags
+	return paths, schemas, tags, scopes
 }
 
-// processOperation strips x-infra-* extensions and generates standard security fields.
-func processOperation(op map[string]interface{}, defaultProtected bool) map[string]interface{} {
+// processOperation strips x-infra-* extensions, generates standard security fields,
+// and returns the scopes it encountered.
+func processOperation(op map[string]interface{}, defaultProtected bool) (map[string]interface{}, []string) {
 	newOp := make(map[string]interface{}, len(op))
 	for k, v := range op {
 		switch k {
@@ -209,16 +240,18 @@ func processOperation(op map[string]interface{}, defaultProtected bool) map[stri
 		protected = v
 	}
 
+	scopes := extractScopes(op)
+
 	if protected {
 		newOp["security"] = []interface{}{
-			map[string]interface{}{"BearerAuth": extractScopes(op)},
+			map[string]interface{}{"BearerAuth": scopes},
 		}
 	} else {
 		// explicit empty array overrides any global security default
 		newOp["security"] = []interface{}{}
 	}
 
-	return newOp
+	return newOp, scopes
 }
 
 func extractScopes(op map[string]interface{}) []string {

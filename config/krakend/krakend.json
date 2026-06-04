@@ -54,7 +54,7 @@
           "scopes": [
             "write:items"
           ],
-          "scopes_matcher": "all"
+          "scopes_matcher": "any"
         }
       },
       "input_headers": [
@@ -113,9 +113,9 @@
             ]
           ],
           "scopes": [
-            "write:items"
+            "delete:items"
           ],
-          "scopes_matcher": "all"
+          "scopes_matcher": "any"
         }
       },
       "input_headers": [

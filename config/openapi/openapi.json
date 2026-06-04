@@ -41,9 +41,17 @@
     },
     "securitySchemes": {
       "BearerAuth": {
-        "bearerFormat": "JWT (Logto)",
-        "scheme": "bearer",
-        "type": "http"
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "http://auth.app.localhost/oidc/auth",
+            "scopes": {
+              "delete:items": "delete:items",
+              "write:items": "write:items"
+            },
+            "tokenUrl": "http://auth.app.localhost/oidc/token"
+          }
+        },
+        "type": "oauth2"
       }
     }
   },
@@ -140,7 +148,7 @@
         "security": [
           {
             "BearerAuth": [
-              "write:items"
+              "delete:items"
             ]
           }
         ],

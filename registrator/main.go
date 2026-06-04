@@ -62,7 +62,8 @@ func main() {
 		ConfigPath:      env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
 	})
 
-	delay := parseDelay(env("INFRA_REGISTRATOR_RELOAD_DELAY", "5s"))
+	debounceDelay := parseDelay(env("INFRA_REGISTRATOR_RELOAD_DELAY", "5s"))
+	pollInterval := parseDelay(env("INFRA_REGISTRATOR_POLL_INTERVAL", "30s"))
 
 	var (
 		timerMu sync.Mutex
@@ -74,11 +75,12 @@ func main() {
 		if timer != nil {
 			timer.Stop()
 		}
-		timer = time.AfterFunc(delay, func() {
+		timer = time.AfterFunc(debounceDelay, func() {
 			reload(registry, agg, gen, docker)
 		})
 	}
 
+	// React to Docker health events.
 	go func() {
 		for ev := range adapter.WatchServices() {
 			switch {
@@ -101,6 +103,17 @@ func main() {
 		}
 	}()
 
+	// Periodically re-fetch specs to catch in-process restarts (watch/hot-reload mode).
+	go func() {
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if len(registry.Services()) > 0 {
+				reload(registry, agg, gen, docker)
+			}
+		}
+	}()
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -112,7 +125,6 @@ func main() {
 
 func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, docker *registrar.DockerClient) {
 	services := registry.Services()
-	log.Printf("reload triggered: %d service(s)", len(services))
 
 	opServices := make([]openapi.ServiceInfo, len(services))
 	gwServices := make([]gateway.ServiceInfo, len(services))
@@ -131,20 +143,24 @@ func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.
 		}
 	}
 
-	if err := agg.Aggregate(opServices); err != nil {
+	opChanged, err := agg.Aggregate(opServices)
+	if err != nil {
 		log.Printf("openapi aggregate: %v", err)
-	} else {
-		log.Println("openapi spec updated")
 	}
 
-	if err := gen.Generate(gwServices); err != nil {
+	gwChanged, err := gen.Generate(gwServices)
+	if err != nil {
 		log.Printf("krakend config: %v", err)
 		return
 	}
-	log.Println("krakend config updated")
 
-	krakendLabel := "com.docker.compose.service=krakend"
-	if err := docker.RestartContainerByLabel(krakendLabel); err != nil {
+	if !opChanged && !gwChanged {
+		return // nothing changed, skip KrakenD restart
+	}
+
+	log.Printf("reload: %d service(s), openapi=%v krakend=%v", len(services), opChanged, gwChanged)
+
+	if err := docker.RestartContainerByLabel("com.docker.compose.service=krakend"); err != nil {
 		log.Printf("krakend restart: %v", err)
 	} else {
 		log.Println("krakend restarting")
@@ -154,7 +170,7 @@ func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.
 func parseDelay(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		log.Printf("invalid reload delay %q, defaulting to 5s", s)
+		log.Printf("invalid duration %q, defaulting to 5s", s)
 		return 5 * time.Second
 	}
 	return d
