@@ -6,21 +6,34 @@
       "backend": [
         {
           "encoding": "json",
+          "extra_config": {
+            "backend/http": {
+              "return_error_code": true,
+              "return_error_details": "backend"
+            }
+          },
           "host": [
             "http://service-a:3000"
           ],
+          "is_collection": true,
           "method": "GET",
           "url_pattern": "/items"
         }
       ],
       "endpoint": "/api/service-a/v1/items",
       "method": "GET",
-      "output_encoding": "json"
+      "output_encoding": "json-collection"
     },
     {
       "backend": [
         {
           "encoding": "json",
+          "extra_config": {
+            "backend/http": {
+              "return_error_code": true,
+              "return_error_details": "backend"
+            }
+          },
           "host": [
             "http://service-a:3000"
           ],
@@ -31,7 +44,7 @@
       "endpoint": "/api/service-a/v1/items",
       "extra_config": {
         "auth/validator": {
-          "alg": "RS256",
+          "alg": "ES384",
           "audience": [
             "https://api.app.localhost"
           ],
@@ -51,14 +64,17 @@
               "x-user-permissions"
             ]
           ],
-          "scopes": [
-            "write:items"
+          "roles": [
+            "Admin",
+            "User"
           ],
-          "scopes_matcher": "any"
+          "roles_key": "roles",
+          "roles_key_is_nested": false
         }
       },
       "input_headers": [
-        "Authorization"
+        "Authorization",
+        "Content-Type"
       ],
       "method": "POST",
       "output_encoding": "json"
@@ -67,6 +83,12 @@
       "backend": [
         {
           "encoding": "json",
+          "extra_config": {
+            "backend/http": {
+              "return_error_code": true,
+              "return_error_details": "backend"
+            }
+          },
           "host": [
             "http://service-a:3000"
           ],
@@ -82,6 +104,12 @@
       "backend": [
         {
           "encoding": "json",
+          "extra_config": {
+            "backend/http": {
+              "return_error_code": true,
+              "return_error_details": "backend"
+            }
+          },
           "host": [
             "http://service-a:3000"
           ],
@@ -92,7 +120,7 @@
       "endpoint": "/api/service-a/v1/items/{id}",
       "extra_config": {
         "auth/validator": {
-          "alg": "RS256",
+          "alg": "ES384",
           "audience": [
             "https://api.app.localhost"
           ],
@@ -112,10 +140,11 @@
               "x-user-permissions"
             ]
           ],
-          "scopes": [
-            "delete:items"
+          "roles": [
+            "Admin"
           ],
-          "scopes_matcher": "any"
+          "roles_key": "roles",
+          "roles_key_is_nested": false
         }
       },
       "input_headers": [

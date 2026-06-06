@@ -4,6 +4,8 @@
 //                    ADMIN_USERNAME, ADMIN_PASSWORD, API_RESOURCE_INDICATOR
 
 import pg from 'pg';
+import fs from 'fs';
+import yaml from 'js-yaml';
 
 const {
   LOGTO_ADMIN_ENDPOINT = 'http://logto:3002',
@@ -18,6 +20,11 @@ if (!DB_URL || !ADMIN_USERNAME || !ADMIN_PASSWORD || !API_RESOURCE_INDICATOR) {
   console.error('Missing required env vars: DB_URL, ADMIN_USERNAME, ADMIN_PASSWORD, API_RESOURCE_INDICATOR');
   process.exit(1);
 }
+
+// Load declarative config; substitute ${VAR} from environment
+const rawConfig = fs.readFileSync('/app/logto.config.yaml', 'utf8')
+  .replace(/\$\{([^}]+)\}/g, (_, k) => process.env[k] ?? '');
+const config = yaml.load(rawConfig);
 
 const db = new pg.Client({ connectionString: DB_URL });
 
@@ -56,8 +63,101 @@ async function api(baseUrl, token, method, path, body) {
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
-  if (!res.ok && res.status !== 404) throw new Error(`${method} ${path} → ${res.status}: ${text}`);
+  // 404 = not found (ok for GET checks), 422 = already exists / already assigned (idempotent)
+  if (!res.ok && res.status !== 404 && res.status !== 422) {
+    throw new Error(`${method} ${path} → ${res.status}: ${text}`);
+  }
   return { status: res.status, data };
+}
+
+// Create resources and scopes declared in config.
+// Returns scopeIndex: map of scope name → scope ID (across all resources).
+async function applyResources(token, resources) {
+  const { data: existing } = await api(LOGTO_ENDPOINT, token, 'GET', '/resources?page_size=50');
+  const scopeIndex = {};
+
+  for (const res of resources ?? []) {
+    let resource = Array.isArray(existing) && existing.find(r => r.indicator === res.indicator);
+    if (!resource) {
+      const { data } = await api(LOGTO_ENDPOINT, token, 'POST', '/resources', {
+        name: res.name,
+        indicator: res.indicator,
+      });
+      resource = data;
+      console.log(`Created resource: ${res.name}`);
+    } else {
+      console.log(`Resource exists: ${res.name}`);
+    }
+
+    const { data: existingScopes } = await api(LOGTO_ENDPOINT, token, 'GET', `/resources/${resource.id}/scopes?page_size=50`);
+    for (const scope of res.scopes ?? []) {
+      let s = Array.isArray(existingScopes) && existingScopes.find(e => e.name === scope.name);
+      if (!s) {
+        const { data } = await api(LOGTO_ENDPOINT, token, 'POST', `/resources/${resource.id}/scopes`, {
+          name: scope.name,
+          description: scope.description ?? '',
+        });
+        s = data;
+        console.log(`  Created scope: ${scope.name}`);
+      } else {
+        console.log(`  Scope exists: ${scope.name}`);
+      }
+      scopeIndex[scope.name] = s.id;
+    }
+  }
+
+  return scopeIndex;
+}
+
+// Create roles and assign their scopes declared in config.
+async function applyRoles(token, roles, scopeIndex) {
+  const { data: existingRoles } = await api(LOGTO_ENDPOINT, token, 'GET', '/roles?type=User&page_size=50');
+
+  for (const role of roles ?? []) {
+    let r = Array.isArray(existingRoles) && existingRoles.find(e => e.name === role.name);
+    if (!r) {
+      const { data } = await api(LOGTO_ENDPOINT, token, 'POST', '/roles', {
+        name: role.name,
+        description: role.description ?? '',
+        type: 'User',
+      });
+      r = data;
+      console.log(`Created role: ${role.name}`);
+    } else {
+      console.log(`Role exists: ${role.name}`);
+    }
+
+    if (!role.scopes?.length) continue;
+
+    const { data: currentScopes } = await api(LOGTO_ENDPOINT, token, 'GET', `/roles/${r.id}/scopes?page_size=50`);
+    const currentIds = new Set((Array.isArray(currentScopes) ? currentScopes : []).map(s => s.id));
+
+    const toAssign = role.scopes
+      .map(name => scopeIndex[name])
+      .filter(id => id && !currentIds.has(id));
+
+    if (toAssign.length) {
+      await api(LOGTO_ENDPOINT, token, 'POST', `/roles/${r.id}/scopes`, { scopeIds: toAssign });
+      const names = role.scopes.filter(n => toAssign.includes(scopeIndex[n]));
+      console.log(`  Assigned scopes to ${role.name}: ${names.join(', ')}`);
+    } else {
+      console.log(`  Scopes up-to-date for ${role.name}`);
+    }
+  }
+}
+
+// Configure Custom JWT access token claims from config.
+async function applyJWT(token, jwtConfig) {
+  if (!jwtConfig?.access_token?.include_roles) return;
+
+  const script = `const getCustomJwtClaims = async ({ token, context, environmentVariables, api }) => {
+  return {
+    roles: (context.user?.roles ?? []).map(r => typeof r === "string" ? r : r.name)
+  };
+};`;
+
+  await api(LOGTO_ENDPOINT, token, 'PUT', '/configs/jwt-customizer/access-token', { script });
+  console.log('Custom JWT claims configured.');
 }
 
 async function main() {
@@ -69,7 +169,12 @@ async function main() {
   const adminToken   = await getToken('m-admin',   adminSecret,   'https://admin.logto.app/api');
   const defaultToken = await getToken('m-default', defaultSecret, 'https://default.logto.app/api');
 
-  // --- Admin user (admin tenant, port 3002) ---
+  // Apply declarative config
+  const scopeIndex = await applyResources(defaultToken, config.resources);
+  await applyRoles(defaultToken, config.roles, scopeIndex);
+  await applyJWT(defaultToken, config.jwt);
+
+  // --- Admin user (admin tenant) ---
   const { data: existingUsers } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/users?page_size=50');
   const existingUser = Array.isArray(existingUsers) && existingUsers.find(u => u.username === ADMIN_USERNAME);
 
@@ -90,31 +195,14 @@ async function main() {
   await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'PATCH', `/users/${userId}/password`, { password: ADMIN_PASSWORD });
   console.log('Admin password set.');
 
-  // Assign admin role
-  const { data: roles } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/roles?type=User');
-  const adminRole = Array.isArray(roles) && roles.find(r => r.name === 'default:admin');
+  const { data: adminRoles } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/roles?type=User');
+  const adminRole = Array.isArray(adminRoles) && adminRoles.find(r => r.name === 'default:admin');
   if (adminRole) {
-    const assign = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/users/${userId}/roles`, { roleIds: [adminRole.id] });
-    if (assign.status === 200 || assign.status === 201 || assign.status === 422) {
-      console.log('Admin role assigned (or already assigned).');
-    }
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/users/${userId}/roles`, { roleIds: [adminRole.id] });
+    console.log('Admin role assigned (or already assigned).');
   }
 
-  // --- API Resource (default tenant, port 3001) ---
-  const { data: resources } = await api(LOGTO_ENDPOINT, defaultToken, 'GET', '/resources');
-  const existingResource = Array.isArray(resources) && resources.find(r => r.indicator === API_RESOURCE_INDICATOR);
-
-  if (existingResource) {
-    console.log(`API resource "${API_RESOURCE_INDICATOR}" already exists.`);
-  } else {
-    await api(LOGTO_ENDPOINT, defaultToken, 'POST', '/resources', {
-      name: 'Infra API',
-      indicator: API_RESOURCE_INDICATOR,
-    });
-    console.log(`Created API resource "${API_RESOURCE_INDICATOR}".`);
-  }
-
-  // --- Add admin user to t-default organization (required for admin console access) ---
+  // Add admin user to t-default org
   const { data: members } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/organizations/t-default/users');
   const isMember = Array.isArray(members) && members.some(m => m.id === userId);
   if (!isMember) {
@@ -125,7 +213,17 @@ async function main() {
     console.log('Admin user already in t-default organization.');
   }
 
-  // --- Mark onboarding complete (admin tenant, port 3002) ---
+  // Write Registrator M2M credentials to shared volume
+  fs.mkdirSync('/run/infra', { recursive: true });
+  fs.writeFileSync('/run/infra/registrator-m2m.json', JSON.stringify({
+    clientId: 'm-default',
+    clientSecret: defaultSecret,
+    tokenEndpoint: LOGTO_ADMIN_ENDPOINT,
+    apiEndpoint: LOGTO_ENDPOINT,
+  }));
+  console.log('Registrator M2M credentials written to /run/infra/registrator-m2m.json.');
+
+  // Mark onboarding complete
   const { data: consoleCfg } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/configs/admin-console');
   if (!consoleCfg.signInExperienceCustomized || !consoleCfg.organizationCreated) {
     await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'PATCH', '/configs/admin-console', {

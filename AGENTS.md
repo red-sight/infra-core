@@ -70,6 +70,14 @@ Quick reference — candidate service labels:
 | `infra.openapi-route` | no | `openapi` | path where the OpenAPI spec is served |
 | `infra.auth.protected` | no | `true` | default auth requirement for all endpoints |
 
+OpenAPI operation extensions:
+
+| Extension | Default | Description |
+|---|---|---|
+| `x-infra-protected` | inherits `infra.auth.protected` | override auth per operation |
+| `x-infra-scopes` | `[]` | required permissions for this operation (documents intent, used to derive allowed roles) |
+| `x-infra-scopes-matcher` | `"any"` | `"any"` — role must have at least one listed scope; `"all"` — role must have all listed scopes |
+
 ## Postgres conventions
 
 Each service gets its own database. `scripts/postgres/init.sh` creates them on first start via `docker-entrypoint-initdb.d`. Add a `CREATE DATABASE` statement here for each new core service that needs one.

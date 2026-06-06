@@ -1,0 +1,38 @@
+# Logto declarative configuration.
+# init.js reads this on every start and applies it idempotently.
+# ${VAR} syntax is substituted from environment variables at runtime.
+#
+# Adding a new service:
+#   1. Add its scopes under resources[].scopes
+#   2. Assign them to the appropriate role(s) under roles[].scopes
+#   That's it — Registrator will pick up the scope→role mapping automatically.
+
+resources:
+  - name: Infra API
+    indicator: "${API_RESOURCE_INDICATOR}"
+    scopes:
+      # service-a
+      - name: read:items
+        description: Read items
+      - name: write:items
+        description: Create or update items
+      - name: delete:items
+        description: Delete items
+
+roles:
+  - name: User
+    description: Standard user — read and write access
+    scopes:
+      - read:items
+      - write:items
+
+  - name: Admin
+    description: Full access including destructive operations
+    scopes:
+      - read:items
+      - write:items
+      - delete:items
+
+jwt:
+  access_token:
+    include_roles: true

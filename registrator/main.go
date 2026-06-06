@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"infra/registrator/internal/gateway"
+	"infra/registrator/internal/logto"
 	"infra/registrator/internal/openapi"
 	"infra/registrator/internal/registrar"
 )
@@ -62,6 +63,8 @@ func main() {
 		ConfigPath:      env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
 	})
 
+	logtoClient := logto.New()
+
 	debounceDelay := parseDelay(env("INFRA_REGISTRATOR_RELOAD_DELAY", "5s"))
 	pollInterval := parseDelay(env("INFRA_REGISTRATOR_POLL_INTERVAL", "30s"))
 
@@ -76,7 +79,7 @@ func main() {
 			timer.Stop()
 		}
 		timer = time.AfterFunc(debounceDelay, func() {
-			reload(registry, agg, gen, docker)
+			reload(registry, agg, gen, logtoClient, docker)
 		})
 	}
 
@@ -109,7 +112,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if len(registry.Services()) > 0 {
-				reload(registry, agg, gen, docker)
+				reload(registry, agg, gen, logtoClient, docker)
 			}
 		}
 	}()
@@ -123,7 +126,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
-func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, docker *registrar.DockerClient) {
+func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client, docker *registrar.DockerClient) {
 	services := registry.Services()
 
 	opServices := make([]openapi.ServiceInfo, len(services))
@@ -148,7 +151,12 @@ func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.
 		log.Printf("openapi aggregate: %v", err)
 	}
 
-	gwChanged, err := gen.Generate(gwServices)
+	scopeRoles, err := lc.ScopeRoles()
+	if err != nil {
+		log.Printf("logto: scope→roles unavailable (%v), KrakenD will use no role restrictions", err)
+	}
+
+	gwChanged, err := gen.Generate(gwServices, scopeRoles)
 	if err != nil {
 		log.Printf("krakend config: %v", err)
 		return

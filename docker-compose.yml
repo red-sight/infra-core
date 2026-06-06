@@ -7,6 +7,7 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  infra_init_data:
 
 services:
   traefik:
@@ -87,7 +88,7 @@ services:
       ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       TRUST_PROXY_HEADER: "1"
-    entrypoint: ["sh", "-c", "npx @logto/cli db seed --db-url $$DB_URL 2>/dev/null; npm start"]
+    entrypoint: ["sh", "-c", "npx @logto/cli db seed --db-url $$DB_URL 2>/dev/null; npx @logto/cli db alteration deploy latest --db-url $$DB_URL 2>/dev/null; npm start"]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/status || exit 1"]
       interval: 15s
@@ -107,6 +108,8 @@ services:
     build: ./scripts/logto
     networks:
       - infra
+    volumes:
+      - infra_init_data:/run/infra
     environment:
       LOGTO_ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
@@ -178,6 +181,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./config/krakend:/etc/krakend
       - ./config/openapi:/specs
+      - infra_init_data:/run/infra:ro
     environment:
       INFRA_MODE: ${INFRA_MODE:-}
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
@@ -185,6 +189,7 @@ services:
       INFRA_HTTP_OIDC_SUBDOMAIN: ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}
       INFRA_API_ROUTE: ${INFRA_API_ROUTE:-api}
       INFRA_LOGTO_API_RESOURCE_ID: ${INFRA_LOGTO_API_RESOURCE_ID}
+      INFRA_LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_REGISTRATOR_RELOAD_DELAY: ${INFRA_REGISTRATOR_RELOAD_DELAY:-5s}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
