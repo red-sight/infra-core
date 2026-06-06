@@ -2,17 +2,14 @@
 
 The Go service that wires Infra together. It watches Docker for healthy API services, generates KrakenD configuration, and aggregates OpenAPI specs into a unified Swagger UI.
 
-Not yet implemented. This document is the design spec.
-
 ## Internal packages
 
 | Package | Responsibility |
 |---|---|
 | `registrar` | Service discovery, registry state |
 | `gateway` | KrakenD config generation and reload |
-| `oidc` | Logto resource management (future) |
+| `logto` | Logto Management API client — fetches scope→role mappings |
 | `openapi` | Spec fetching, aggregation, Swagger hosting |
-| `admin` | HTTP API surface |
 
 ## Environment variables
 
@@ -25,7 +22,7 @@ Not yet implemented. This document is the design spec.
 | `INFRA_API_ROUTE` | `api` | API gateway path prefix |
 | `INFRA_LOGTO_API_RESOURCE_ID` | — | Logto API Resource indicator (required) |
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
-| `INFRA_REGISTRATOR_POLL_INTERVAL` | `30s` | how often to re-fetch specs from registered services and reload if changed (covers in-process restarts in watch/hot-reload mode) |
+| `INFRA_REGISTRATOR_POLL_INTERVAL` | `30s` | how often to re-fetch specs from registered services and reload if changed |
 | `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
 
 ## Service discovery
@@ -67,10 +64,22 @@ Subscribes to Docker `service` task events. Emits a `ServiceEvent` when a task t
 The debounce timer resets on every new `ServiceEvent`. When it fires (after `INFRA_REGISTRATOR_RELOAD_DELAY`):
 
 1. Fetch OpenAPI spec from each healthy registered service
-2. Generate new `config/krakend/krakend.json`
-3. Restart the KrakenD container
+2. Query Logto Management API for current scope→role mappings
+3. Generate new `config/krakend/krakend.json`
+4. Restart the KrakenD container
 
 In Swarm, KrakenD's `update_config: order: start-first` ensures the new replica is healthy before the old one stops — no dropped requests during reload.
+
+## RBAC — scope→role resolution
+
+Before generating each KrakenD config, the Registrator queries the Logto Management API via the `logto` package to build a scope→role map. Both user roles and organization roles are fetched and merged into a single map.
+
+When an OpenAPI operation declares `x-infra-scopes: [read:items, write:items]`, the Registrator resolves which roles hold those scopes and writes the resulting role list into the KrakenD `auth/validator` `roles` field. KrakenD then validates the flat `roles` claim in the JWT against that list.
+
+This means:
+- API specs declare intent (required scopes).
+- Role assignments live in Logto (`logto.config.yaml` / Management API).
+- KrakenD enforces a flat role list — it never sees scope names.
 
 ## KrakenD config generation
 
@@ -93,7 +102,7 @@ Applied to every protected endpoint, derived from env:
 
 | KrakenD field | Value |
 |---|---|
-| `alg` | `RS256` (Logto only issues RS256) |
+| `alg` | `ES384` (Logto signs with EC P-384) |
 | `jwk_url` | `{INFRA_HTTP_PROTOCOL}://{INFRA_HTTP_OIDC_SUBDOMAIN}.{INFRA_HTTP_BASE_DOMAIN}/oidc/jwks` |
 | `disable_jwk_security` | `true` if `INFRA_HTTP_PROTOCOL=http`, else `false` |
 | `audience` | `INFRA_LOGTO_API_RESOURCE_ID` |
@@ -105,10 +114,8 @@ Declared per-operation in the service's OpenAPI spec:
 | Extension | Type | Default | Description |
 |---|---|---|---|
 | `x-infra-protected` | `bool` | inherits `infra.auth.protected` Docker label | `false` = public endpoint, no `auth/validator` block generated |
-| `x-infra-scopes` | `string[]` | — | required permissions; generates `scopes` in `auth/validator` |
-| `x-infra-scopes-matcher` | `"all"\|"any"` | `"any"` | scope matching logic — `"any"` (OR) means access if the token contains at least one listed scope; `"all"` (AND) requires every scope to be present |
-
-**Permissions vs roles:** API specs declare required permissions (scopes) only. Roles are Logto-managed groupings — they are not part of the API contract and must not appear in OpenAPI specs.
+| `x-infra-scopes` | `string[]` | — | required scopes; Registrator resolves these to roles via Logto and sets them in KrakenD `roles` |
+| `x-infra-scopes-matcher` | `"all"\|"any"` | `"any"` | scope matching logic used when resolving which roles qualify — `"any"` (OR) means roles that hold at least one listed scope; `"all"` (AND) means roles that hold every listed scope |
 
 A protected endpoint with no scopes declared (`x-infra-protected: true`, no `x-infra-scopes`) accepts any valid JWT.
 
@@ -120,7 +127,7 @@ Applied to every protected endpoint via KrakenD `propagate_claims` and `input_he
 |---|---|
 | `sub` | `x-user-id` |
 | `roles` | `x-user-roles` |
-| `scope` | `x-user-permissions` |
+| `organization_id` | `x-organization-id` |
 | `Authorization` | `Authorization` (raw JWT passthrough via `input_headers`) |
 
 ## OpenAPI aggregation and Swagger
@@ -191,7 +198,6 @@ A microservice joins Infra by:
 
 ## Open items
 
-- **Local dev watch mode (no Docker):** `LocalAdapter` implementing `EnvironmentAdapter`, accepting REST registrations with heartbeat TTL. Deferred post-MVP.
+- **LocalAdapter (no-Docker dev mode):** `LocalAdapter` implementing `EnvironmentAdapter`, accepting REST registrations with heartbeat TTL. Deferred post-MVP.
 - **KrakenD zero-downtime in Swarm:** two replicas + blue/green via Traefik. Out of scope for MVP; single replica with `start-first` is sufficient.
-- **Logto scope lifecycle:** auto-create Logto API Resource scopes when a service registers with `x-infra-scopes`. Deferred — manual scope management for now.
-- **`x-infra-scopes` implementation:** `x-infra-protected` ships first; scopes follow once the auth flow is validated end-to-end.
+- **`depends_on` gap:** `logto-init` does not declare `depends_on: logto` — startup ordering relies on `restart: on-failure` retries. This is intentional for now but means init may attempt Logto's API before it is ready and will need several retries on a cold start.

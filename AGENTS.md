@@ -6,7 +6,17 @@ Read this before working on anything in this repository.
 
 A self-assembling Docker infrastructure suite. Candidate microservices join by adding Docker labels and a healthcheck — Infra discovers them, reads their OpenAPI docs, and registers their endpoints with the API gateway automatically. No manual gateway config.
 
-Core components: Traefik (routing), Logto (OIDC), KrakenD (API gateway), Postgres, Redis, and the Registrator (the custom Go service that wires everything together).
+Core components: Traefik (routing), Logto (OIDC), KrakenD (API gateway), Postgres, Redis, the Registrator (the custom Go service that wires everything together), and logto-init (a one-shot Node.js init container).
+
+## Documentation
+
+Three docs must be kept up to date as the project evolves:
+
+- `README.md` — user-facing: getting started, routing, services, authorization model
+- `registrator/README.md` — implementer-facing: Registrator internals, env vars, KrakenD config generation, service contract
+- `AGENTS.md` — agent-facing: key decisions, constraints, open items
+
+**Rule:** when a feature changes how the system works, update the relevant doc(s) before committing. Do not leave docs describing unimplemented designs or outdated behavior.
 
 ## Key decisions and why
 
@@ -28,9 +38,15 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 
 **KrakenD has no OIDC auto-discovery.** The JWKS URL must be explicit. The Registrator derives it from `INFRA_HTTP_OIDC_SUBDOMAIN` + `INFRA_HTTP_BASE_DOMAIN` + `/oidc/jwks`.
 
+**KrakenD uses `alg: ES384`.** Logto signs tokens with EC P-384. Do not use RS256 — it will reject all tokens.
+
 **`disable_jwk_security`** must be `true` for local HTTP, `false` for prod HTTPS. The Registrator sets this based on `INFRA_HTTP_PROTOCOL`.
 
-**Logto API Resource is required.** Without a configured API Resource in Logto, issued JWTs have no `aud` claim and KrakenD rejects every token. This must be created during headless init.
+**Logto API Resource is required.** Without a configured API Resource in Logto, issued JWTs have no `aud` claim and KrakenD rejects every token. This is created by `logto-init` via `logto.config.yaml`.
+
+**All initial Logto config via `scripts/logto/init.js`.** Never configure Logto manually via the admin UI for anything declared in `logto.config.yaml` — `logto-init` runs on every `compose up` and will overwrite manual changes. Runtime changes to things not covered by the config file may use the Management API directly.
+
+**`infra_init_data` volume.** Shared between `logto-init` and `registrator`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json`; the Registrator reads them on startup.
 
 ## Service images (pinned)
 
@@ -59,7 +75,16 @@ All derived from env vars: `INFRA_HTTP_PROTOCOL`, `INFRA_HTTP_BASE_DOMAIN`, `INF
 
 ## Registrator
 
-A Go service planned in `registrator/`. See [`registrator/README.md`](registrator/README.md) for the full design.
+A Go service in `registrator/`. See [`registrator/README.md`](registrator/README.md) for the full design.
+
+Internal packages:
+
+| Package | Responsibility |
+|---|---|
+| `registrar` | Service discovery, registry state |
+| `gateway` | KrakenD config generation and reload |
+| `logto` | Logto Management API client — fetches scope→role mappings |
+| `openapi` | Spec fetching, aggregation, Swagger hosting |
 
 Quick reference — candidate service labels:
 
@@ -67,6 +92,7 @@ Quick reference — candidate service labels:
 |---|---|---|---|
 | `infra.enabled` | yes | — | must be `true` to be discovered |
 | `infra.name` | yes | — | service identifier |
+| `infra.port` | yes | — | internal container port |
 | `infra.openapi-route` | no | `openapi` | path where the OpenAPI spec is served |
 | `infra.auth.protected` | no | `true` | default auth requirement for all endpoints |
 
@@ -75,8 +101,16 @@ OpenAPI operation extensions:
 | Extension | Default | Description |
 |---|---|---|
 | `x-infra-protected` | inherits `infra.auth.protected` | override auth per operation |
-| `x-infra-scopes` | `[]` | required permissions for this operation (documents intent, used to derive allowed roles) |
-| `x-infra-scopes-matcher` | `"any"` | `"any"` — role must have at least one listed scope; `"all"` — role must have all listed scopes |
+| `x-infra-scopes` | `[]` | required scopes; Registrator resolves these to roles via Logto and writes them to KrakenD `roles` |
+| `x-infra-scopes-matcher` | `"any"` | `"any"` (OR) — roles holding at least one listed scope; `"all"` (AND) — roles holding every listed scope |
+
+Claim propagation to backends:
+
+| JWT claim | Forwarded header |
+|---|---|
+| `sub` | `x-user-id` |
+| `roles` | `x-user-roles` |
+| `organization_id` | `x-organization-id` |
 
 ## Postgres conventions
 
@@ -86,5 +120,6 @@ In Swarm, Postgres is pinned to a labeled node (`node.labels.infra.postgres == t
 
 ## Open / unresolved
 
-- **Logto startup command**: the `entrypoint` in `docker-compose.yml` that seeds the DB and starts the node process needs validation against the actual image internals.
-- **Postgres init env vars**: `scripts/postgres/init.sh` references `INFRA_PG_LOGTO_DB` — confirm this env var is available inside `docker-entrypoint-initdb.d` at runtime.
+- **LocalAdapter (no-Docker dev mode):** `LocalAdapter` for `EnvironmentAdapter` with REST-based registration and heartbeat TTL. Deferred post-MVP.
+- **KrakenD zero-downtime in Swarm:** two replicas + blue/green via Traefik. Out of scope for MVP; single replica with `start-first` is sufficient.
+- **`depends_on` gap:** `logto-init` does not declare `depends_on: logto` — startup ordering relies on `restart: on-failure` retries. Known issue; on a cold start `logto-init` will retry several times before Logto is ready.
