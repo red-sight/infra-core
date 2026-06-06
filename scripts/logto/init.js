@@ -62,7 +62,12 @@ async function api(baseUrl, token, method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    // non-JSON response — leave data as {}
+  }
   // 404 = not found (ok for GET checks), 422 = already exists / already assigned (idempotent)
   if (!res.ok && res.status !== 404 && res.status !== 422) {
     throw new Error(`${method} ${path} → ${res.status}: ${text}`);
@@ -146,13 +151,59 @@ async function applyRoles(token, roles, scopeIndex) {
   }
 }
 
+// Create organization roles and assign resource scopes.
+async function applyOrganizationRoles(token, orgRoles, scopeIndex) {
+  const { data: existing } = await api(LOGTO_ENDPOINT, token, 'GET', '/organization-roles?page_size=50');
+
+  for (const role of orgRoles ?? []) {
+    let r = Array.isArray(existing) && existing.find(e => e.name === role.name);
+    if (!r) {
+      const { data } = await api(LOGTO_ENDPOINT, token, 'POST', '/organization-roles', {
+        name: role.name,
+        description: role.description ?? '',
+      });
+      r = data;
+      console.log(`Created org role: ${role.name}`);
+    } else {
+      console.log(`Org role exists: ${role.name}`);
+    }
+
+    if (!role.scopes?.length) continue;
+
+    const { data: currentScopes } = await api(LOGTO_ENDPOINT, token, 'GET', `/organization-roles/${r.id}/resource-scopes?page_size=50`);
+    const currentIds = new Set((Array.isArray(currentScopes) ? currentScopes : []).map(s => s.id));
+
+    const toAssign = role.scopes
+      .map(name => scopeIndex[name])
+      .filter(id => id && !currentIds.has(id));
+
+    if (toAssign.length) {
+      await api(LOGTO_ENDPOINT, token, 'POST', `/organization-roles/${r.id}/resource-scopes`, { scopeIds: toAssign });
+      const names = role.scopes.filter(n => toAssign.includes(scopeIndex[n]));
+      console.log(`  Assigned resource scopes to org role ${role.name}: ${names.join(', ')}`);
+    } else {
+      console.log(`  Resource scopes up-to-date for org role ${role.name}`);
+    }
+  }
+}
+
 // Configure Custom JWT access token claims from config.
+// Merges user roles and organization roles into a single flat "roles" array.
+// Includes organization_id when the token is org-scoped.
 async function applyJWT(token, jwtConfig) {
   if (!jwtConfig?.access_token?.include_roles) return;
 
   const script = `const getCustomJwtClaims = async ({ token, context, environmentVariables, api }) => {
+  const userRoles = (context.user?.roles ?? []).map(r => typeof r === "string" ? r : r.name);
+
+  const orgId = context.organization?.id ?? null;
+  const orgRoles = orgId
+    ? (context.user?.organizationRoles?.[orgId] ?? []).map(r => typeof r === "string" ? r : r.name)
+    : [];
+
   return {
-    roles: (context.user?.roles ?? []).map(r => typeof r === "string" ? r : r.name)
+    roles: [...new Set([...userRoles, ...orgRoles])],
+    ...(orgId ? { organization_id: orgId } : {}),
   };
 };`;
 
@@ -172,6 +223,7 @@ async function main() {
   // Apply declarative config
   const scopeIndex = await applyResources(defaultToken, config.resources);
   await applyRoles(defaultToken, config.roles, scopeIndex);
+  await applyOrganizationRoles(defaultToken, config.organization_roles, scopeIndex);
   await applyJWT(defaultToken, config.jwt);
 
   // --- Admin user (admin tenant) ---

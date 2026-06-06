@@ -4,8 +4,8 @@
 #
 # Adding a new service:
 #   1. Add its scopes under resources[].scopes
-#   2. Assign them to the appropriate role(s) under roles[].scopes
-#   That's it — Registrator will pick up the scope→role mapping automatically.
+#   2. Assign them to the appropriate role(s) under roles[] and/or organization_roles[]
+#   Registrator picks up the scope→role mapping automatically (user roles + org roles merged).
 
 resources:
   - name: Infra API
@@ -19,19 +19,30 @@ resources:
       - name: delete:items
         description: Delete items
 
+# Global user roles — not scoped to any organization.
 roles:
-  - name: User
-    description: Standard user — read and write access
-    scopes:
-      - read:items
-      - write:items
-
-  - name: Admin
-    description: Full access including destructive operations
+  - name: admin
+    description: Platform administrator — full access to everything
     scopes:
       - read:items
       - write:items
       - delete:items
+
+# Organization roles — scoped per organization.
+# Resource scopes here are merged with user role scopes into one flat roles array in the JWT.
+organization_roles:
+  - name: org_owner
+    description: Organization owner — full access within the organization
+    scopes:
+      - read:items
+      - write:items
+      - delete:items
+
+  - name: org_user
+    description: Organization member — standard access
+    scopes:
+      - read:items
+      - write:items
 
 jwt:
   access_token:

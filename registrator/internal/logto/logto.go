@@ -43,6 +43,7 @@ func New() *Client {
 }
 
 // ScopeRoles returns a map of scope name → role names that have that scope.
+// Merges both user roles and organization roles (resource scopes).
 // Returns nil if credentials are not yet available (init hasn't finished).
 func (c *Client) ScopeRoles() (map[string][]string, error) {
 	if err := c.loadCreds(); err != nil {
@@ -53,12 +54,13 @@ func (c *Client) ScopeRoles() (map[string][]string, error) {
 		return nil, err
 	}
 
+	result := make(map[string][]string)
+
+	// User roles and their resource scopes.
 	roles, err := c.fetchRoles(token)
 	if err != nil {
 		return nil, err
 	}
-
-	result := make(map[string][]string)
 	for _, r := range roles {
 		scopes, err := c.fetchRoleScopes(token, r.ID)
 		if err != nil {
@@ -68,6 +70,22 @@ func (c *Client) ScopeRoles() (map[string][]string, error) {
 			result[s.Name] = append(result[s.Name], r.Name)
 		}
 	}
+
+	// Organization roles and their resource scopes — merged into the same flat map.
+	orgRoles, err := c.fetchOrgRoles(token)
+	if err != nil {
+		return nil, fmt.Errorf("fetch org roles: %w", err)
+	}
+	for _, r := range orgRoles {
+		scopes, err := c.fetchOrgRoleResourceScopes(token, r.ID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch resource scopes for org role %s: %w", r.Name, err)
+		}
+		for _, s := range scopes {
+			result[s.Name] = append(result[s.Name], r.Name)
+		}
+	}
+
 	return result, nil
 }
 
@@ -148,6 +166,29 @@ func (c *Client) fetchRoles(token string) ([]role, error) {
 func (c *Client) fetchRoleScopes(token, roleID string) ([]scope, error) {
 	var scopes []scope
 	err := c.get(token, fmt.Sprintf("/api/roles/%s/scopes?page_size=50", roleID), &scopes)
+	return scopes, err
+}
+
+func (c *Client) fetchOrgRoles(token string) ([]role, error) {
+	var all []role
+	page := 1
+	for {
+		var batch []role
+		if err := c.get(token, fmt.Sprintf("/api/organization-roles?page=%d&page_size=50", page), &batch); err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if len(batch) < 50 {
+			break
+		}
+		page++
+	}
+	return all, nil
+}
+
+func (c *Client) fetchOrgRoleResourceScopes(token, roleID string) ([]scope, error) {
+	var scopes []scope
+	err := c.get(token, fmt.Sprintf("/api/organization-roles/%s/resource-scopes?page_size=50", roleID), &scopes)
 	return scopes, err
 }
 

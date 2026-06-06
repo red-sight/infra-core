@@ -214,7 +214,7 @@ func (g *Generator) buildEndpoint(method, gatewayPath, backendPath, host string,
 		"propagate_claims": [][]string{
 			{"sub", "x-user-id"},
 			{"roles", "x-user-roles"},
-			{"scope", "x-user-permissions"},
+			{"organization_id", "x-organization-id"},
 		},
 	}
 	if len(roles) > 0 {
