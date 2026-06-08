@@ -13,6 +13,59 @@
             }
           },
           "host": [
+            "http://service-core:8080"
+          ],
+          "method": "GET",
+          "url_pattern": "/admin/organizations"
+        }
+      ],
+      "endpoint": "/api/service-core/v1/admin/organizations",
+      "extra_config": {
+        "auth/validator": {
+          "alg": "ES384",
+          "audience": [
+            "https://api.app.localhost"
+          ],
+          "disable_jwk_security": true,
+          "jwk_url": "http://auth.app.localhost/oidc/jwks",
+          "propagate_claims": [
+            [
+              "sub",
+              "x-user-id"
+            ],
+            [
+              "roles",
+              "x-user-roles"
+            ],
+            [
+              "organization_id",
+              "x-organization-id"
+            ]
+          ],
+          "roles": [
+            "admin"
+          ],
+          "roles_key": "roles",
+          "roles_key_is_nested": false
+        }
+      },
+      "input_headers": [
+        "Authorization"
+      ],
+      "method": "GET",
+      "output_encoding": "json"
+    },
+    {
+      "backend": [
+        {
+          "encoding": "json",
+          "extra_config": {
+            "backend/http": {
+              "return_error_code": true,
+              "return_error_details": "backend"
+            }
+          },
+          "host": [
             "http://service-a:3000"
           ],
           "is_collection": true,
@@ -153,59 +206,6 @@
         "Authorization"
       ],
       "method": "DELETE",
-      "output_encoding": "json"
-    },
-    {
-      "backend": [
-        {
-          "encoding": "json",
-          "extra_config": {
-            "backend/http": {
-              "return_error_code": true,
-              "return_error_details": "backend"
-            }
-          },
-          "host": [
-            "http://service-core:8080"
-          ],
-          "method": "GET",
-          "url_pattern": "/admin/organizations"
-        }
-      ],
-      "endpoint": "/api/service-core/v1/admin/organizations",
-      "extra_config": {
-        "auth/validator": {
-          "alg": "ES384",
-          "audience": [
-            "https://api.app.localhost"
-          ],
-          "disable_jwk_security": true,
-          "jwk_url": "http://auth.app.localhost/oidc/jwks",
-          "propagate_claims": [
-            [
-              "sub",
-              "x-user-id"
-            ],
-            [
-              "roles",
-              "x-user-roles"
-            ],
-            [
-              "organization_id",
-              "x-organization-id"
-            ]
-          ],
-          "roles": [
-            "admin"
-          ],
-          "roles_key": "roles",
-          "roles_key_is_nested": false
-        }
-      },
-      "input_headers": [
-        "Authorization"
-      ],
-      "method": "GET",
       "output_encoding": "json"
     }
   ],
