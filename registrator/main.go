@@ -41,7 +41,8 @@ func main() {
 	case "swarm":
 		adapter = registrar.NewSwarmAdapter(docker)
 	default:
-		adapter = registrar.NewComposeAdapter(docker)
+		reconcileEvery := parseDelay(env("INFRA_REGISTRATOR_RECONCILE_INTERVAL", "30s"))
+		adapter = registrar.NewComposeAdapter(docker, reconcileEvery)
 	}
 
 	registry := registrar.NewRegistry()

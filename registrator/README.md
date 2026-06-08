@@ -22,7 +22,7 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 | `INFRA_API_ROUTE` | `api` | API gateway path prefix |
 | `INFRA_LOGTO_API_RESOURCE_ID` | — | Logto API Resource indicator (required) |
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
-| `INFRA_REGISTRATOR_POLL_INTERVAL` | `30s` | how often to re-fetch specs from registered services and reload if changed |
+| `INFRA_REGISTRATOR_RECONCILE_INTERVAL` | `30s` | reconcile loop interval — re-scans all healthy labeled containers and re-registers any that were falsely removed due to stale Docker events |
 | `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
 
 ## Service discovery
@@ -50,6 +50,8 @@ Backend address is `http://<name>:<port>` in both modes — Docker DNS resolves 
 ### ComposeAdapter
 
 Subscribes to Docker `container` events. Emits a `ServiceEvent` on `health_status: healthy` (Healthy: true) and `health_status: unhealthy` / `die` / `stop` (Healthy: false, or Removed: true).
+
+In addition to event-driven updates, `ComposeAdapter` runs a reconcile loop on every `INFRA_REGISTRATOR_RECONCILE_INTERVAL` tick. It re-scans all healthy labeled containers and re-emits healthy events for them, recovering any services that were falsely unregistered by stale stop/die events from `--force-recreate`.
 
 ### SwarmAdapter
 

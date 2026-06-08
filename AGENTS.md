@@ -57,6 +57,7 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 | KrakenD | `krakend:latest` |
 | Postgres | `postgres:17-alpine` |
 | Redis | `redis:7-alpine` |
+| NATS | `nats:2.10-alpine` |
 
 When suggesting image updates, pin to a specific version. `latest` is acceptable during development but not for production Swarm deployments.
 
@@ -117,6 +118,17 @@ Claim propagation to backends:
 Each service gets its own database. `scripts/postgres/init.sh` creates them on first start via `docker-entrypoint-initdb.d`. Add a `CREATE DATABASE` statement here for each new core service that needs one.
 
 In Swarm, Postgres is pinned to a labeled node (`node.labels.infra.postgres == true`) so its data volume survives service rescheduling.
+
+## Known issues
+
+**Stale Docker events cause false unregister after `--force-recreate`** — ~~workaround is `docker compose restart registrator`~~. **Fixed** by the reconcile loop (`INFRA_REGISTRATOR_RECONCILE_INTERVAL`, default `30s`): on each tick, `ComposeAdapter` re-scans all healthy labeled containers and emits healthy events for them, re-registering any that were falsely removed due to stale stop/die events.
+
+
+
+**Swagger UI "Unknown Type: array,null"** — Huma generates OpenAPI 3.1 schemas where nullable types use the JSON Schema array syntax (`"type": ["array", "null"]`). The Registrator's aggregator declares the combined spec as `openapi: 3.0.0` but copies Huma schemas verbatim. Swagger UI interprets the spec as 3.0, where `nullable: true` is expected, and renders the field as "Unknown Type: array,null". The API itself is unaffected. Fix options (in preference order):
+1. Avoid nullable types in response structs — use zero values instead of pointers where semantically valid.
+2. Configure Huma to emit 3.0: `huma.DefaultConfig(...)` accepts an `OpenAPIVersion` field — with `"3.0.3"` Huma emits `nullable: true` instead.
+3. Add a schema post-processing step in the Registrator aggregator to rewrite `type: [X, null]` → `type: X, nullable: true`.
 
 ## Open / unresolved
 

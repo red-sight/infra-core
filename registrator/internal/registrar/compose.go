@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"time"
 )
 
 const (
@@ -16,15 +17,17 @@ const (
 
 // ComposeAdapter watches Docker container health events for Compose deployments.
 type ComposeAdapter struct {
-	docker *DockerClient
-	events chan ServiceEvent
-	cancel context.CancelFunc
+	docker          *DockerClient
+	events          chan ServiceEvent
+	cancel          context.CancelFunc
+	reconcileEvery  time.Duration
 }
 
-func NewComposeAdapter(docker *DockerClient) *ComposeAdapter {
+func NewComposeAdapter(docker *DockerClient, reconcileEvery time.Duration) *ComposeAdapter {
 	return &ComposeAdapter{
-		docker: docker,
-		events: make(chan ServiceEvent, 32),
+		docker:         docker,
+		events:         make(chan ServiceEvent, 32),
+		reconcileEvery: reconcileEvery,
 	}
 }
 
@@ -48,6 +51,9 @@ func (a *ComposeAdapter) run(ctx context.Context) {
 		"label": {labelEnabled + "=true"},
 	})
 
+	reconcile := time.NewTicker(a.reconcileEvery)
+	defer reconcile.Stop()
+
 	for {
 		select {
 		case ev, ok := <-dockerEvents:
@@ -59,6 +65,8 @@ func (a *ComposeAdapter) run(ctx context.Context) {
 			if err != nil {
 				log.Printf("registrar(compose): event stream error: %v", err)
 			}
+		case <-reconcile.C:
+			a.scanHealthy(ctx)
 		case <-ctx.Done():
 			return
 		}

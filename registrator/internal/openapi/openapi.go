@@ -211,6 +211,7 @@ func (a *Aggregator) processSpec(svc ServiceInfo, raw map[string]interface{}) (p
 
 	if comps, ok := raw["components"].(map[string]interface{}); ok {
 		if s, ok := comps["schemas"].(map[string]interface{}); ok {
+			normalizeSchemas(s)
 			schemas = s
 		}
 	}
@@ -279,4 +280,61 @@ func specVersion(raw map[string]interface{}) string {
 
 var httpMethods = []string{
 	"get", "post", "put", "patch", "delete", "head", "options", "trace",
+}
+
+// normalizeSchemas converts OpenAPI 3.1 nullable type arrays to 3.0 nullable:true
+// so that Swagger UI renders them correctly. Huma emits 3.1-style schemas
+// ("type": ["array", "null"]) but the aggregated spec targets OpenAPI 3.0.
+func normalizeSchemas(schemas map[string]interface{}) {
+	for _, v := range schemas {
+		if s, ok := v.(map[string]interface{}); ok {
+			normalizeSchema(s)
+		}
+	}
+}
+
+func normalizeSchema(s map[string]interface{}) {
+	// Convert ["X", "null"] → type: "X", nullable: true
+	if types, ok := s["type"].([]interface{}); ok {
+		nonNull := make([]string, 0, len(types))
+		nullable := false
+		for _, t := range types {
+			if str, ok := t.(string); ok {
+				if str == "null" {
+					nullable = true
+				} else {
+					nonNull = append(nonNull, str)
+				}
+			}
+		}
+		if nullable && len(nonNull) == 1 {
+			s["type"] = nonNull[0]
+			s["nullable"] = true
+		}
+	}
+
+	// Recurse into properties
+	if props, ok := s["properties"].(map[string]interface{}); ok {
+		for _, v := range props {
+			if child, ok := v.(map[string]interface{}); ok {
+				normalizeSchema(child)
+			}
+		}
+	}
+
+	// Recurse into items (arrays)
+	if items, ok := s["items"].(map[string]interface{}); ok {
+		normalizeSchema(items)
+	}
+
+	// Recurse into allOf / anyOf / oneOf
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if arr, ok := s[key].([]interface{}); ok {
+			for _, v := range arr {
+				if child, ok := v.(map[string]interface{}); ok {
+					normalizeSchema(child)
+				}
+			}
+		}
+	}
 }
