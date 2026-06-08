@@ -19,6 +19,7 @@ services:
           - ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
           - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
           - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+          - ${INFRA_ADMIN_SUBDOMAIN:-admin}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -117,7 +118,46 @@ services:
       ADMIN_USERNAME: ${INFRA_LOGTO_ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${INFRA_LOGTO_ADMIN_PASSWORD:?INFRA_LOGTO_ADMIN_PASSWORD is required}
       API_RESOURCE_INDICATOR: ${INFRA_LOGTO_API_RESOURCE_ID:?INFRA_LOGTO_API_RESOURCE_ID is required}
+      INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
+      INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      INFRA_ADMIN_SUBDOMAIN: ${INFRA_ADMIN_SUBDOMAIN:-admin}
     restart: on-failure
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    networks:
+      - infra
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  service-core:
+    build:
+      context: .
+      dockerfile: service-core/Dockerfile
+    restart: unless-stopped
+    networks:
+      - infra
+    environment:
+      DATABASE_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_CORE_DB:-service_core}
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      infra.enabled: "true"
+      infra.name: service-core
+      infra.port: "8080"
+      infra.openapi-route: openapi.json
+      infra.auth.protected: "true"
 
   service-a:
     build: ./service-a
@@ -143,10 +183,8 @@ services:
     networks:
       - infra
     environment:
-      SWAGGER_JSON: /specs/openapi.json
+      SWAGGER_JSON_URL: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_BASE_DOMAIN:-app.localhost}/openapi.json
       BASE_URL: /${INFRA_DOCS_ROUTE:-docs}
-    volumes:
-      - ./config/openapi:/specs:ro
     labels:
       traefik.enable: "true"
       traefik.http.routers.swagger.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && PathPrefix(`/${INFRA_DOCS_ROUTE:-docs}`)"
@@ -197,3 +235,26 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.registrator-spec.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && Path(`/openapi.json`)"
+      traefik.http.routers.registrator-spec.service: "registrator-spec"
+      traefik.http.services.registrator-spec.loadbalancer.server.port: "8081"
+
+  admin:
+    build:
+      context: ./admin
+      target: prod
+    restart: unless-stopped
+    networks:
+      - infra
+    volumes:
+      - infra_init_data:/run/infra:ro
+    environment:
+      VITE_REDIRECT_URI: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_ADMIN_SUBDOMAIN:-admin}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}/callback
+      VITE_API_BASE_URL: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_BASE_DOMAIN:-app.localhost}/${INFRA_API_ROUTE:-api}
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.admin.rule: "Host(`${INFRA_ADMIN_SUBDOMAIN:-admin}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.admin.entrypoints: "web"
+      traefik.http.services.admin.loadbalancer.server.port: "80"

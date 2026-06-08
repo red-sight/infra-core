@@ -18,6 +18,13 @@ resources:
         description: Create or update items
       - name: delete:items
         description: Delete items
+      # service-core — organizations
+      - name: read:organizations
+        description: List and view organizations
+      - name: write:organizations
+        description: Create and update organizations
+      - name: delete:organizations
+        description: Delete organizations
 
 # Global user roles — not scoped to any organization.
 roles:
@@ -27,6 +34,9 @@ roles:
       - read:items
       - write:items
       - delete:items
+      - read:organizations
+      - write:organizations
+      - delete:organizations
 
 # Organization roles — scoped per organization.
 # Resource scopes here are merged with user role scopes into one flat roles array in the JWT.
@@ -43,6 +53,16 @@ organization_roles:
     scopes:
       - read:items
       - write:items
+
+applications:
+  - name: Admin
+    type: SPA
+    redirectUris:
+      - "${INFRA_HTTP_PROTOCOL}://${INFRA_ADMIN_SUBDOMAIN}.${INFRA_HTTP_BASE_DOMAIN}/callback"
+      - "http://localhost:5173/callback"
+    postLogoutRedirectUris:
+      - "${INFRA_HTTP_PROTOCOL}://${INFRA_ADMIN_SUBDOMAIN}.${INFRA_HTTP_BASE_DOMAIN}"
+      - "http://localhost:5173"
 
 jwt:
   access_token:

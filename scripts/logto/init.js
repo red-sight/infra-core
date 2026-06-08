@@ -187,6 +187,41 @@ async function applyOrganizationRoles(token, orgRoles, scopeIndex) {
   }
 }
 
+// Create SPA/Native applications declared in config.
+// Returns a map of application name → application ID.
+async function applyApplications(token, applications) {
+  const { data: existing } = await api(LOGTO_ENDPOINT, token, 'GET', '/applications?page_size=50');
+  const result = {};
+
+  for (const app of applications ?? []) {
+    const found = Array.isArray(existing) && existing.find(e => e.name === app.name && e.type === app.type);
+
+    if (!found) {
+      const { data } = await api(LOGTO_ENDPOINT, token, 'POST', '/applications', {
+        name: app.name,
+        type: app.type,
+        oidcClientMetadata: {
+          redirectUris: app.redirectUris ?? [],
+          postLogoutRedirectUris: app.postLogoutRedirectUris ?? [],
+        },
+      });
+      result[app.name] = data.id;
+      console.log(`Created application: ${app.name} (${data.id})`);
+    } else {
+      await api(LOGTO_ENDPOINT, token, 'PATCH', `/applications/${found.id}`, {
+        oidcClientMetadata: {
+          redirectUris: app.redirectUris ?? [],
+          postLogoutRedirectUris: app.postLogoutRedirectUris ?? [],
+        },
+      });
+      result[app.name] = found.id;
+      console.log(`Application exists: ${app.name} (${found.id})`);
+    }
+  }
+
+  return result;
+}
+
 // Configure Custom JWT access token claims from config.
 // Merges user roles and organization roles into a single flat "roles" array.
 // Includes organization_id when the token is org-scoped.
@@ -225,6 +260,47 @@ async function main() {
   await applyRoles(defaultToken, config.roles, scopeIndex);
   await applyOrganizationRoles(defaultToken, config.organization_roles, scopeIndex);
   await applyJWT(defaultToken, config.jwt);
+  const appIds = await applyApplications(defaultToken, config.applications);
+
+  // Write per-app configs to shared volume for runtime consumption
+  const adminAppId = appIds['Admin'];
+  if (adminAppId) {
+    fs.writeFileSync('/run/infra/admin-app.json', JSON.stringify({
+      appId: adminAppId,
+      endpoint: LOGTO_ENDPOINT,
+      apiResource: API_RESOURCE_INDICATOR,
+    }));
+    console.log(`Admin app config written (appId: ${adminAppId}).`);
+  }
+
+  // --- Admin user (default tenant — app users) ---
+  const { data: defaultUsers } = await api(LOGTO_ENDPOINT, defaultToken, 'GET', '/users?page_size=50');
+  const existingDefaultUser = Array.isArray(defaultUsers) && defaultUsers.find(u => u.username === ADMIN_USERNAME);
+
+  let defaultUserId;
+  if (existingDefaultUser) {
+    defaultUserId = existingDefaultUser.id;
+    console.log(`App admin user "${ADMIN_USERNAME}" already exists (${defaultUserId}), updating password.`);
+  } else {
+    const { data: newUser } = await api(LOGTO_ENDPOINT, defaultToken, 'POST', '/users', {
+      username: ADMIN_USERNAME,
+      password: ADMIN_PASSWORD,
+      name: 'Admin',
+    });
+    defaultUserId = newUser.id;
+    console.log(`Created app admin user "${ADMIN_USERNAME}" (${defaultUserId}).`);
+  }
+
+  await api(LOGTO_ENDPOINT, defaultToken, 'PATCH', `/users/${defaultUserId}/password`, { password: ADMIN_PASSWORD });
+  console.log('App admin password set.');
+
+  // Assign the admin role in the default tenant
+  const { data: defaultRoles } = await api(LOGTO_ENDPOINT, defaultToken, 'GET', '/roles?type=User&page_size=50');
+  const defaultAdminRole = Array.isArray(defaultRoles) && defaultRoles.find(r => r.name === 'admin');
+  if (defaultAdminRole) {
+    await api(LOGTO_ENDPOINT, defaultToken, 'POST', `/users/${defaultUserId}/roles`, { roleIds: [defaultAdminRole.id] });
+    console.log('App admin role assigned (or already assigned).');
+  }
 
   // --- Admin user (admin tenant) ---
   const { data: existingUsers } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/users?page_size=50');

@@ -39,6 +39,16 @@ services:
       logto:
         condition: service_healthy
 
+  nats:
+    ports:
+      - "4223:4222"
+      - "8223:8222"
+
+  service-core:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   service-a:
     build:
       context: ./service-a
@@ -63,3 +73,20 @@ services:
     depends_on:
       registrator:
         condition: service_healthy
+
+  admin:
+    build:
+      target: dev
+      args:
+        UID: "${CURRENT_UID:-1000}"
+        GID: "${CURRENT_GID:-1000}"
+    volumes:
+      - ./admin:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    labels:
+      traefik.http.services.admin.loadbalancer.server.port: "5173"
+    depends_on:
+      logto-init:
+        condition: service_completed_successfully
