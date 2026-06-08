@@ -1,0 +1,7 @@
+go 1.26.3
+
+use (
+	./service-core
+)
+
+replace github.com/red-sight/infra-core/query v0.0.0 => ./query
