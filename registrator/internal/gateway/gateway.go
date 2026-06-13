@@ -35,13 +35,22 @@ type ServiceInfo struct {
 
 // Generator reads service OpenAPI specs and writes a complete krakend.json.
 type Generator struct {
-	cfg  Config
-	mu   sync.Mutex
-	hash [32]byte
+	cfg      Config
+	mu       sync.Mutex
+	hash     [32]byte
+	validate func(candidatePath string) error // optional; run on the candidate before promoting it
 }
 
 func New(cfg Config) *Generator {
 	return &Generator{cfg: cfg}
+}
+
+// SetValidator installs a validation hook run against the freshly written
+// candidate config before it is promoted over the live config. If it returns an
+// error the candidate is discarded and the live config is left untouched. Used to
+// run `krakend check` so an invalid config never reaches KrakenD.
+func (g *Generator) SetValidator(fn func(candidatePath string) error) {
+	g.validate = fn
 }
 
 // Generate fetches specs from all services, derives KrakenD endpoints, and rewrites ConfigPath
@@ -67,42 +76,55 @@ func (g *Generator) Generate(services []ServiceInfo, scopeRoles map[string][]str
 	h := sha256.Sum256(data)
 
 	g.mu.Lock()
-	changed := h != g.hash
-	if changed {
-		g.hash = h
-		for _, ep := range endpoints {
-			epMap, ok := ep.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			extra, ok := epMap["extra_config"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			validator, ok := extra["auth/validator"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			roles, ok := validator["roles"].([]string)
-			if !ok {
-				continue
-			}
-			for _, r := range roles {
-				if r == denyAllRole {
-					log.Printf("gateway: endpoint %s %s has required scopes but no role covers them — access denied for all",
-						epMap["method"], epMap["endpoint"])
-					break
-				}
-			}
-		}
-	}
+	unchanged := h == g.hash
 	g.mu.Unlock()
-
-	if !changed {
+	if unchanged {
 		return false, nil
 	}
 
-	return true, fsutil.AtomicWrite(g.cfg.ConfigPath, data, 0644)
+	logDenyAllEndpoints(endpoints)
+
+	// Write the candidate, validate it (e.g. `krakend check`), and only then
+	// promote it over the live config. On failure the hash is left unchanged so
+	// the next pass retries rather than treating the bad config as delivered.
+	if err := fsutil.AtomicWriteFunc(g.cfg.ConfigPath, data, 0644, g.validate); err != nil {
+		return false, err
+	}
+
+	g.mu.Lock()
+	g.hash = h
+	g.mu.Unlock()
+	return true, nil
+}
+
+// logDenyAllEndpoints warns for each endpoint that ended up with the deny-all
+// sentinel — required scopes that no role covers (access denied for everyone).
+func logDenyAllEndpoints(endpoints []interface{}) {
+	for _, ep := range endpoints {
+		epMap, ok := ep.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		extra, ok := epMap["extra_config"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		validator, ok := extra["auth/validator"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		roles, ok := validator["roles"].([]string)
+		if !ok {
+			continue
+		}
+		for _, r := range roles {
+			if r == denyAllRole {
+				log.Printf("gateway: endpoint %s %s has required scopes but no role covers them — access denied for all",
+					epMap["method"], epMap["endpoint"])
+				break
+			}
+		}
+	}
 }
 
 // --- spec fetching (mirrors openapi package — kept separate to avoid cross-package dependency) ---

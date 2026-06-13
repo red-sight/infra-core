@@ -2,6 +2,7 @@ package registrar
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -42,6 +44,26 @@ func (d *DockerClient) get(path string, query url.Values) (*http.Response, error
 
 func (d *DockerClient) post(path string) (*http.Response, error) {
 	return d.http.Post(dockerBase+path, "application/json", nil) //nolint:gosec
+}
+
+func (d *DockerClient) postJSON(path string, body interface{}) (*http.Response, error) {
+	var buf io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		buf = bytes.NewReader(b)
+	}
+	return d.http.Post(dockerBase+path, "application/json", buf) //nolint:gosec
+}
+
+func (d *DockerClient) httpDelete(path string) (*http.Response, error) {
+	req, err := http.NewRequest("DELETE", dockerBase+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return d.http.Do(req)
 }
 
 // --- Mode detection ---
@@ -81,8 +103,8 @@ type ContainerSummary struct {
 
 // ContainerDetail is returned by GET /containers/{id}/json.
 type ContainerDetail struct {
-	ID   string `json:"Id"`
-	Name string `json:"Name"`
+	ID     string `json:"Id"`
+	Name   string `json:"Name"`
 	Config struct {
 		Labels       map[string]string      `json:"Labels"`
 		ExposedPorts map[string]interface{} `json:"ExposedPorts"`
@@ -92,6 +114,12 @@ type ContainerDetail struct {
 			Status string `json:"Status"` // "healthy", "unhealthy", "starting"
 		} `json:"Health"`
 	} `json:"State"`
+	Mounts []struct {
+		Type        string `json:"Type"`   // "bind" or "volume"
+		Name        string `json:"Name"`   // volume name (empty for binds)
+		Source      string `json:"Source"` // host path (bind) or volume mountpoint
+		Destination string `json:"Destination"`
+	} `json:"Mounts"`
 }
 
 // Containers returns running containers matching label (e.g. "infra.enabled=true").
@@ -137,6 +165,154 @@ func (d *DockerClient) RestartContainerByLabel(label string) error {
 		return fmt.Errorf("restart HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// --- One-shot containers (used for `krakend check` validation) ---
+
+// OneShotSpec describes a short-lived container to create, run to completion, and
+// inspect. It is not auto-removed: the caller removes it on success and may leave
+// it for inspection on failure (its Name makes its purpose self-evident).
+type OneShotSpec struct {
+	Name        string   // container name, e.g. "krakend-check"
+	Image       string   // image reference
+	Cmd         []string // command + args
+	Binds       []string // HostConfig.Binds, e.g. "/host/path:/etc/krakend:ro"
+	NetworkNone bool     // run with no network (NetworkMode "none")
+}
+
+// OneShotResult is the outcome of a finished one-shot container.
+type OneShotResult struct {
+	ID       string
+	ExitCode int
+	Logs     string // combined stdout+stderr
+}
+
+// RunOneShot creates a container from spec, starts it, waits for it to exit, and
+// returns its exit code and logs. Any pre-existing container with the same name
+// (e.g. a previous failed run left for inspection) is removed first. The created
+// container is left in place; the caller decides whether to remove it.
+func (d *DockerClient) RunOneShot(spec OneShotSpec) (OneShotResult, error) {
+	var res OneShotResult
+
+	if spec.Name != "" {
+		_ = d.RemoveContainer(spec.Name) // best-effort: clear a stale run
+	}
+
+	hostConfig := map[string]interface{}{"Binds": spec.Binds}
+	if spec.NetworkNone {
+		hostConfig["NetworkMode"] = "none"
+	}
+	createBody := map[string]interface{}{
+		"Image":      spec.Image,
+		"Cmd":        spec.Cmd,
+		"Tty":        true, // raw (non-multiplexed) log stream
+		"HostConfig": hostConfig,
+	}
+
+	path := "/containers/create"
+	if spec.Name != "" {
+		path += "?" + url.Values{"name": {spec.Name}}.Encode()
+	}
+	resp, err := d.postJSON(path, createBody)
+	if err != nil {
+		return res, fmt.Errorf("create: %w", err)
+	}
+	created, err := decodeOrError(resp, "create", struct {
+		ID string `json:"Id"`
+	}{})
+	if err != nil {
+		return res, err
+	}
+	res.ID = created.ID
+
+	startResp, err := d.post("/containers/" + res.ID + "/start")
+	if err != nil {
+		return res, fmt.Errorf("start: %w", err)
+	}
+	if err := expectStatus(startResp, "start"); err != nil {
+		return res, err
+	}
+
+	waitResp, err := d.post("/containers/" + res.ID + "/wait")
+	if err != nil {
+		return res, fmt.Errorf("wait: %w", err)
+	}
+	wait, err := decodeOrError(waitResp, "wait", struct {
+		StatusCode int `json:"StatusCode"`
+	}{})
+	if err != nil {
+		return res, err
+	}
+	res.ExitCode = wait.StatusCode
+
+	logsResp, err := d.get("/containers/"+res.ID+"/logs", url.Values{"stdout": {"1"}, "stderr": {"1"}})
+	if err != nil {
+		return res, fmt.Errorf("logs: %w", err)
+	}
+	defer logsResp.Body.Close()
+	logBytes, _ := io.ReadAll(logsResp.Body)
+	res.Logs = string(logBytes)
+
+	return res, nil
+}
+
+// RemoveContainer force-removes a container by ID or name. A missing container
+// (404) is not an error — the caller often removes pre-emptively.
+func (d *DockerClient) RemoveContainer(id string) error {
+	resp, err := d.httpDelete("/containers/" + id + "?force=1")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("remove HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// SelfBindSource inspects this registrator container and returns the host source
+// of the mount whose destination is destDir. It lets a sibling container reuse the
+// same bind (e.g. the KrakenD config dir) without knowing the host layout.
+func (d *DockerClient) SelfBindSource(destDir string) (string, error) {
+	id, err := os.Hostname() // Docker sets the container hostname to its short ID
+	if err != nil {
+		return "", err
+	}
+	detail, err := d.ContainerInspect(id)
+	if err != nil {
+		return "", fmt.Errorf("inspect self (%s): %w", id, err)
+	}
+	for _, m := range detail.Mounts {
+		if m.Destination == destDir {
+			return m.Source, nil
+		}
+	}
+	return "", fmt.Errorf("no mount with destination %q on self (%s)", destDir, id)
+}
+
+// expectStatus closes resp and returns an error if its status is not 2xx.
+func expectStatus(resp *http.Response, op string) error {
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s HTTP %d: %s", op, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// decodeOrError closes resp; on a 2xx it decodes the body into a value shaped like
+// out and returns it, otherwise it returns the HTTP error.
+func decodeOrError[T any](resp *http.Response, op string, out T) (T, error) {
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return out, fmt.Errorf("%s HTTP %d: %s", op, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("%s decode: %w", op, err)
+	}
+	return out, nil
 }
 
 // --- Swarm service API ---

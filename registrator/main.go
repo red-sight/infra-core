@@ -64,6 +64,14 @@ func main() {
 		ConfigPath:      env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
 	})
 
+	// Validate every generated config with `krakend check` before it is promoted,
+	// unless explicitly disabled. Runs a one-shot KrakenD container; the image
+	// should be pinned to match the running KrakenD in prod.
+	if env("INFRA_REGISTRATOR_VALIDATE", "true") != "false" {
+		v := krakendValidator{docker: docker, image: env("INFRA_KRAKEND_IMAGE", "krakend:latest")}
+		gen.SetValidator(v.validate)
+	}
+
 	logtoClient := logto.New()
 
 	rmode := resolveReloadMode(mode)

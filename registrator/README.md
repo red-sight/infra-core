@@ -25,6 +25,8 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
 | `INFRA_REGISTRATOR_RECONCILE_INTERVAL` | `30s` | reconcile loop interval — re-scans all healthy labeled containers and re-registers any that were falsely removed due to stale Docker events |
 | `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
+| `INFRA_REGISTRATOR_VALIDATE` | `true` | run `krakend check` on each candidate config before promoting it; set `false` to skip validation |
+| `INFRA_KRAKEND_IMAGE` | `krakend:latest` | image used for the one-shot `krakend-check` validation container — pin to match the running KrakenD in prod |
 
 ## Service discovery
 
@@ -68,7 +70,7 @@ The debounce timer resets on every new `ServiceEvent`. When it fires (after `INF
 
 1. Fetch OpenAPI spec from each healthy registered service
 2. Query Logto Management API for current scope→role mappings
-3. Generate new `config/krakend/krakend.json` (written atomically; skipped if the rendered config is unchanged)
+3. Generate the new config and, unless `INFRA_REGISTRATOR_VALIDATE=false`, validate it with `krakend check` in a one-shot `krakend-check` container before promoting it over `config/krakend/krakend.json`. The candidate is written to a temp file in the config dir, validated there, and atomically renamed in only if valid (and only if the rendered config changed). An invalid candidate is discarded — the live config is left untouched and KrakenD is not touched. The `krakend-check` container is removed on success and left for inspection on failure.
 4. Deliver, per `INFRA_REGISTRATOR_RELOAD_MODE`:
    - `auto` (dev): restart the local KrakenD container so it re-reads the config.
    - `artifact` (prod): do nothing — KrakenD is never restarted autonomously; applying the regenerated config is a gated deploy step.
