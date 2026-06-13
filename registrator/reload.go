@@ -82,29 +82,54 @@ func (r genResult) changed() bool { return r.openapiChanged || r.krakendChanged 
 // generate snapshots the registry, rebuilds the aggregated OpenAPI spec and the
 // KrakenD config (writing both atomically as a side effect), and reports what
 // changed. It never restarts anything — that is the reloader's responsibility.
-func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client) genResult {
-	services := registry.Services()
-
-	opServices := make([]openapi.ServiceInfo, len(services))
-	gwServices := make([]gateway.ServiceInfo, len(services))
-	for i, svc := range services {
-		opServices[i] = openapi.ServiceInfo{
-			Name:          svc.Name,
-			Port:          svc.Port,
-			OpenAPIRoute:  svc.OpenAPIRoute,
-			AuthProtected: svc.AuthProtected,
+// scanOnce performs a single synchronous discovery pass and populates the registry
+// with the eligible (healthy, non-removed) services it finds. Returns the count.
+func scanOnce(adapter registrar.EnvironmentAdapter, registry *registrar.Registry) int {
+	for _, ev := range adapter.Scan() {
+		if ev.Healthy && !ev.Removed {
+			registry.Add(registrar.Service{
+				Name:          ev.Name,
+				Port:          ev.Port,
+				OpenAPIRoute:  ev.OpenAPIRoute,
+				AuthProtected: ev.AuthProtected,
+			})
 		}
-		gwServices[i] = gateway.ServiceInfo{
+	}
+	return len(registry.Services())
+}
+
+func gatewayServices(registry *registrar.Registry) []gateway.ServiceInfo {
+	services := registry.Services()
+	out := make([]gateway.ServiceInfo, len(services))
+	for i, svc := range services {
+		out[i] = gateway.ServiceInfo{
 			Name:          svc.Name,
 			Port:          svc.Port,
 			OpenAPIRoute:  svc.OpenAPIRoute,
 			AuthProtected: svc.AuthProtected,
 		}
 	}
+	return out
+}
 
-	res := genResult{serviceCount: len(services)}
+func openapiServices(registry *registrar.Registry) []openapi.ServiceInfo {
+	services := registry.Services()
+	out := make([]openapi.ServiceInfo, len(services))
+	for i, svc := range services {
+		out[i] = openapi.ServiceInfo{
+			Name:          svc.Name,
+			Port:          svc.Port,
+			OpenAPIRoute:  svc.OpenAPIRoute,
+			AuthProtected: svc.AuthProtected,
+		}
+	}
+	return out
+}
 
-	opChanged, err := agg.Aggregate(opServices)
+func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client) genResult {
+	res := genResult{serviceCount: len(registry.Services())}
+
+	opChanged, err := agg.Aggregate(openapiServices(registry))
 	if err != nil {
 		log.Printf("openapi aggregate: %v", err)
 	}
@@ -115,7 +140,7 @@ func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gatewa
 		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
 	}
 
-	gwChanged, err := gen.Generate(gwServices, scopeRoles)
+	gwChanged, err := gen.Generate(gatewayServices(registry), scopeRoles)
 	if err != nil {
 		log.Printf("krakend config: %v", err)
 		return res

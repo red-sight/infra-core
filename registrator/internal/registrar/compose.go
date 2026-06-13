@@ -8,19 +8,19 @@ import (
 )
 
 const (
-	labelEnabled      = "infra.enabled"
-	labelName         = "infra.name"
-	labelPort         = "infra.port"
-	labelOpenAPIRoute = "infra.openapi-route"
+	labelEnabled       = "infra.enabled"
+	labelName          = "infra.name"
+	labelPort          = "infra.port"
+	labelOpenAPIRoute  = "infra.openapi-route"
 	labelAuthProtected = "infra.auth.protected"
 )
 
 // ComposeAdapter watches Docker container health events for Compose deployments.
 type ComposeAdapter struct {
-	docker          *DockerClient
-	events          chan ServiceEvent
-	cancel          context.CancelFunc
-	reconcileEvery  time.Duration
+	docker         *DockerClient
+	events         chan ServiceEvent
+	cancel         context.CancelFunc
+	reconcileEvery time.Duration
 }
 
 func NewComposeAdapter(docker *DockerClient, reconcileEvery time.Duration) *ComposeAdapter {
@@ -73,12 +73,14 @@ func (a *ComposeAdapter) run(ctx context.Context) {
 	}
 }
 
-func (a *ComposeAdapter) scanHealthy(ctx context.Context) {
+// Scan returns events for all currently healthy, labeled containers.
+func (a *ComposeAdapter) Scan() []ServiceEvent {
 	containers, err := a.docker.Containers(labelEnabled + "=true")
 	if err != nil {
-		log.Printf("registrar(compose): initial scan: %v", err)
-		return
+		log.Printf("registrar(compose): scan: %v", err)
+		return nil
 	}
+	var events []ServiceEvent
 	for _, c := range containers {
 		detail, err := a.docker.ContainerInspect(c.ID)
 		if err != nil {
@@ -88,12 +90,17 @@ func (a *ComposeAdapter) scanHealthy(ctx context.Context) {
 		if detail.State.Health.Status != "healthy" {
 			continue
 		}
-		svc, ok := serviceFromLabels(detail.Config.Labels)
-		if !ok {
-			continue
+		if svc, ok := serviceFromLabels(detail.Config.Labels); ok {
+			events = append(events, toEvent(svc, true, false))
 		}
+	}
+	return events
+}
+
+func (a *ComposeAdapter) scanHealthy(ctx context.Context) {
+	for _, ev := range a.Scan() {
 		select {
-		case a.events <- toEvent(svc, true, false):
+		case a.events <- ev:
 		case <-ctx.Done():
 			return
 		}

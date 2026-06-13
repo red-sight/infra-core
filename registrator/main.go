@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +22,10 @@ func env(key, def string) string {
 }
 
 func main() {
+	once := flag.Bool("once", false, "run a single generate+deliver pass and exit (for CI after deploy convergence)")
+	dryRun := flag.Bool("dry-run", false, "render the KrakenD config to stdout and exit; do not write, validate, or apply")
+	flag.Parse()
+
 	log.SetFlags(0)
 	log.SetPrefix("[registrator] ")
 
@@ -82,6 +87,30 @@ func main() {
 		rl = artifactReloader{}
 	default:
 		rl = autoReloader{docker: docker}
+	}
+
+	// One-shot modes: a single synchronous scan, then act and exit. No watcher,
+	// no poll loop, no HTTP server.
+	if *dryRun {
+		n := scanOnce(adapter, registry)
+		log.Printf("dry-run: %d service(s)", n)
+		scopeRoles, err := logtoClient.ScopeRoles()
+		if err != nil {
+			log.Printf("logto: scope→roles unavailable (%v); rendering with deny-all for scoped endpoints (fail-closed)", err)
+		}
+		data, err := gen.Render(gatewayServices(registry), scopeRoles)
+		if err != nil {
+			log.Fatalf("dry-run render: %v", err)
+		}
+		os.Stdout.Write(data)
+		os.Stdout.Write([]byte("\n"))
+		return
+	}
+	if *once {
+		n := scanOnce(adapter, registry)
+		log.Printf("once: %d service(s)", n)
+		reload(registry, agg, gen, logtoClient, rl)
+		return
 	}
 
 	debounceDelay := parseDelay(env("INFRA_REGISTRATOR_RELOAD_DELAY", "5s"))

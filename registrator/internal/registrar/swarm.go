@@ -68,19 +68,28 @@ func (a *SwarmAdapter) run(ctx context.Context) {
 	}
 }
 
-func (a *SwarmAdapter) scanServices(ctx context.Context) {
+// Scan returns events for all currently labeled Swarm services. Health is not
+// checked here — in Swarm the deploy waits for task convergence before a one-shot
+// generate runs, so listing labeled services is the correct snapshot.
+func (a *SwarmAdapter) Scan() []ServiceEvent {
 	services, err := a.docker.SwarmServices(labelEnabled + "=true")
 	if err != nil {
-		log.Printf("registrar(swarm): list services: %v", err)
-		return
+		log.Printf("registrar(swarm): scan: %v", err)
+		return nil
 	}
+	var events []ServiceEvent
 	for _, s := range services {
-		svc, ok := serviceFromLabels(s.Spec.Labels)
-		if !ok {
-			continue
+		if svc, ok := serviceFromLabels(s.Spec.Labels); ok {
+			events = append(events, toEvent(svc, true, false))
 		}
+	}
+	return events
+}
+
+func (a *SwarmAdapter) scanServices(ctx context.Context) {
+	for _, ev := range a.Scan() {
 		select {
-		case a.events <- toEvent(svc, true, false):
+		case a.events <- ev:
 		case <-ctx.Done():
 			return
 		}

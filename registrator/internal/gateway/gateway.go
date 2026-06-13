@@ -58,17 +58,7 @@ func (g *Generator) SetValidator(fn func(candidatePath string) error) {
 // scopeRoles maps scope name → role names that hold that scope; nil means roles are unavailable
 // (Logto init not yet complete) and the generator falls back to scope-based validation.
 func (g *Generator) Generate(services []ServiceInfo, scopeRoles map[string][]string) (bool, error) {
-	var endpoints []interface{}
-	for _, svc := range services {
-		raw, err := g.fetchSpec(svc)
-		if err != nil {
-			log.Printf("gateway: skip %s: %v", svc.Name, err)
-			continue
-		}
-		endpoints = append(endpoints, g.endpointsFromSpec(svc, raw, scopeRoles)...)
-	}
-
-	data, err := g.marshalConfig(endpoints)
+	data, endpoints, err := g.build(services, scopeRoles)
 	if err != nil {
 		return false, err
 	}
@@ -125,6 +115,35 @@ func logDenyAllEndpoints(endpoints []interface{}) {
 			}
 		}
 	}
+}
+
+// Render fetches specs and returns the complete krakend.json bytes without
+// writing, validating, or touching the change-detection hash. Used by --dry-run
+// to preview exactly what would be generated.
+func (g *Generator) Render(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, error) {
+	data, _, err := g.build(services, scopeRoles)
+	return data, err
+}
+
+// build fetches every service spec, derives the KrakenD endpoints, and marshals
+// the complete config. It returns both the bytes and the endpoint list (the
+// latter for change-time logging in Generate).
+func (g *Generator) build(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, []interface{}, error) {
+	var endpoints []interface{}
+	for _, svc := range services {
+		raw, err := g.fetchSpec(svc)
+		if err != nil {
+			log.Printf("gateway: skip %s: %v", svc.Name, err)
+			continue
+		}
+		endpoints = append(endpoints, g.endpointsFromSpec(svc, raw, scopeRoles)...)
+	}
+
+	data, err := g.marshalConfig(endpoints)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, endpoints, nil
 }
 
 // --- spec fetching (mirrors openapi package — kept separate to avoid cross-package dependency) ---

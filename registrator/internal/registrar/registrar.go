@@ -5,6 +5,10 @@ import "sync"
 // EnvironmentAdapter is the source of ServiceEvents, abstracting Compose from Swarm.
 type EnvironmentAdapter interface {
 	WatchServices() <-chan ServiceEvent
+	// Scan returns a single synchronous snapshot of currently-eligible services
+	// (healthy + labeled), without starting an event stream. Used by one-shot
+	// runs (--once / --dry-run) and as the initial pass of WatchServices.
+	Scan() []ServiceEvent
 	Mode() string // "compose" | "swarm"
 }
 

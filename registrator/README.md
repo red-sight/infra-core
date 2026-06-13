@@ -28,6 +28,17 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 | `INFRA_REGISTRATOR_VALIDATE` | `true` | run `krakend check` on each candidate config before promoting it; set `false` to skip validation |
 | `INFRA_KRAKEND_IMAGE` | `krakend:latest` | image used for the one-shot `krakend-check` validation container — pin to match the running KrakenD in prod |
 
+## CLI flags
+
+By default the registrator runs as a long-lived watcher. Two flags switch it to a single synchronous pass that exits:
+
+| Flag | Behavior |
+|---|---|
+| `-once` | Scan once, generate + validate + deliver a single time, then exit. The prod path: a CI job runs this after the deploy converges. |
+| `-dry-run` | Scan once, render the KrakenD config to **stdout**, and exit — no write, no validation, no apply. Logs go to stderr, so `registrator -dry-run > krakend.json` captures exactly what would be generated. Use it to preview a change locally before opening a PR. |
+
+Neither flag starts the event watcher, poll loop, or HTTP server.
+
 ## Service discovery
 
 ### EnvironmentAdapter
