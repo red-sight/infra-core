@@ -23,7 +23,7 @@
 
 configs:
   krakend_bootstrap:
-    file: ./config/krakend/krakend.json
+    file: ./config/krakend/krakend.bootstrap.json
 
 services:
   traefik:

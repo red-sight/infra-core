@@ -1,23 +1,21 @@
 # KrakenD config
 
-`krakend.json` here is a **bootstrap**, not a hand-maintained gateway config. It
-holds the stable top-level settings (logging, timeout, cache) with an **empty
-`endpoints` array**. The registrator owns the routes:
+Routes are **generated**, not hand-maintained — the source of truth is each
+service's OpenAPI spec, aggregated by the registrator.
 
-- **Dev** (registrator `auto` mode): the registrator discovers services, aggregates
-  their OpenAPI specs, regenerates this file on the bind mount, and restarts KrakenD.
-  So this file will be overwritten locally with the live routes while the stack runs.
-- **Swarm/prod** (registrator `artifact` mode): KrakenD boots on this file delivered
-  as the `krakend_bootstrap` Swarm config object (see `docker-compose.swarm.yml`),
-  then the registrator delivers a generated `krakend-config-<hash>` config object and
-  rolls the service.
+- **`krakend.bootstrap.json`** (committed) — stable top-level settings (logging,
+  timeout, cache) with an **empty `endpoints` array**. The config KrakenD boots on
+  before routes are delivered.
+- **`krakend.json`** (gitignored, generated) — the live config with routes. Never
+  committed.
 
-**Do not commit the regenerated (route-filled) version** — only the empty-endpoints
-bootstrap is tracked. The generated routes are derived state, not source of truth
-(the source is each service's OpenAPI spec). To stop the dev stack from showing this
-file as dirty locally:
+How it's served:
 
-```sh
-git update-index --skip-worktree config/krakend/krakend.json
-# undo with: git update-index --no-skip-worktree config/krakend/krakend.json
-```
+- **Dev** (registrator `auto` mode): KrakenD seeds `krakend.json` from the bootstrap
+  on first boot (see the `command` in `docker-compose.override.yml`), then the
+  registrator discovers services, regenerates `krakend.json` on the bind mount, and
+  restarts KrakenD.
+- **Swarm/prod** (registrator `artifact` mode): the bootstrap is delivered as the
+  `krakend_bootstrap` Swarm config object (`docker-compose.swarm.yml`); the
+  registrator then delivers a generated `krakend-config-<hash>` object and rolls the
+  service.

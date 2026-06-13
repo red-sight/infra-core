@@ -5,3 +5,7 @@ node_modules
 
 # Claude Code: share project settings, keep personal/local settings out
 .claude/settings.local.json
+
+# KrakenD: krakend.json is generated (dev: registrator; swarm: config object).
+# Only the committed krakend.bootstrap.json is tracked.
+config/krakend/krakend.json
