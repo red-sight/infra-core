@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"infra/registrator/internal/fsutil"
 )
 
 // Config holds the runtime configuration for KrakenD config generation.
@@ -86,7 +88,7 @@ func (g *Generator) Generate(services []ServiceInfo, scopeRoles map[string][]str
 				continue
 			}
 			for _, r := range roles {
-				if r == "__no_role_configured__" {
+				if r == denyAllRole {
 					log.Printf("gateway: endpoint %s %s has required scopes but no role covers them — access denied for all",
 						epMap["method"], epMap["endpoint"])
 					break
@@ -100,7 +102,7 @@ func (g *Generator) Generate(services []ServiceInfo, scopeRoles map[string][]str
 		return false, nil
 	}
 
-	return true, os.WriteFile(g.cfg.ConfigPath, data, 0644)
+	return true, fsutil.AtomicWrite(g.cfg.ConfigPath, data, 0644)
 }
 
 // --- spec fetching (mirrors openapi package — kept separate to avoid cross-package dependency) ---
@@ -297,18 +299,32 @@ func scopesMatcher(op map[string]interface{}) string {
 	return "any"
 }
 
+// denyAllRole is a sentinel role that no real user holds. It is assigned to an
+// endpoint whenever required scopes cannot be satisfied — either because the
+// scope→role mapping is unavailable (Logto init not yet complete) or because no
+// role covers the required scopes. KrakenD then rejects every request to that
+// endpoint: fail closed, never fail open.
+const denyAllRole = "__no_role_configured__"
+
 // resolveRoles maps required scopes to the roles that satisfy them.
 // matcher "any": union of roles that have at least one required scope.
 // matcher "all": intersection of roles that have all required scopes.
-// Returns nil if scopeRoles is nil (Logto not ready) or scopes is empty.
+// Returns nil when no scopes are required (the endpoint carries no role
+// restriction). When scopes ARE required but cannot be resolved, returns the
+// deny-all sentinel so the endpoint fails closed rather than admitting any valid JWT.
 func resolveRoles(scopes []string, matcher string, scopeRoles map[string][]string) []string {
-	if len(scopes) == 0 || scopeRoles == nil {
+	if len(scopes) == 0 {
 		return nil
 	}
+	// Scopes are required → the endpoint must be role-restricted. If the mapping
+	// is unavailable, deny all rather than letting every authenticated caller through.
+	if scopeRoles == nil {
+		return []string{denyAllRole}
+	}
 
+	var result []string
 	if matcher == "all" {
 		// Start with roles that have the first scope, then intersect.
-		var result []string
 		first := true
 		for _, s := range scopes {
 			roleSet := toSet(scopeRoles[s])
@@ -325,25 +341,23 @@ func resolveRoles(scopes []string, matcher string, scopeRoles map[string][]strin
 			}
 			result = intersect
 		}
-		return result
-	}
-
-	// "any": union of all roles that have at least one scope.
-	seen := map[string]bool{}
-	var result []string
-	for _, s := range scopes {
-		for _, r := range scopeRoles[s] {
-			if !seen[r] {
-				seen[r] = true
-				result = append(result, r)
+	} else {
+		// "any": union of all roles that have at least one scope.
+		seen := map[string]bool{}
+		for _, s := range scopes {
+			for _, r := range scopeRoles[s] {
+				if !seen[r] {
+					seen[r] = true
+					result = append(result, r)
+				}
 			}
 		}
 	}
 	sort.Strings(result)
 
-	// Scopes are required but no role covers them → deny all by default.
+	// Scopes are required but no role covers them → deny all.
 	if len(result) == 0 {
-		return []string{"__no_role_configured__"}
+		return []string{denyAllRole}
 	}
 	return result
 }

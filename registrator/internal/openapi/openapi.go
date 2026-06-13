@@ -7,9 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
+
+	"infra/registrator/internal/fsutil"
 )
 
 // Config holds the runtime configuration for the aggregator.
@@ -67,7 +68,7 @@ func (a *Aggregator) Aggregate(services []ServiceInfo) (bool, error) {
 	}
 
 	path := filepath.Join(a.cfg.SpecsPath, "openapi.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := fsutil.AtomicWrite(path, data, 0644); err != nil {
 		return false, fmt.Errorf("openapi: write %s: %w", path, err)
 	}
 	return true, nil

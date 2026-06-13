@@ -127,7 +127,14 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
+// reloadMu serializes reload across its two callers — the debounce timer and the
+// poll ticker — so they cannot generate and write the config concurrently.
+var reloadMu sync.Mutex
+
 func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client, docker *registrar.DockerClient) {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+
 	services := registry.Services()
 
 	opServices := make([]openapi.ServiceInfo, len(services))
@@ -154,7 +161,7 @@ func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.
 
 	scopeRoles, err := lc.ScopeRoles()
 	if err != nil {
-		log.Printf("logto: scope→roles unavailable (%v), KrakenD will use no role restrictions", err)
+		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
 	}
 
 	gwChanged, err := gen.Generate(gwServices, scopeRoles)
