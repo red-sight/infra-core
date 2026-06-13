@@ -1,3 +1,30 @@
+# Swarm/prod overlay. Deploy with:
+#   docker stack deploy -c docker-compose.yml -c docker-compose.swarm.yml infra
+#
+# Swarm ignores `build` and `depends_on`, so every service that only had `build`
+# in the base needs an explicit `image` here. KrakenD's config is delivered as a
+# Swarm config object (not a bind mount): it boots on the `krakend_bootstrap`
+# object below, then the registrator (artifact mode) rolls it onto a generated
+# `krakend-config-<hash>` object after deploy.
+#
+# NOT yet configured here — require real infrastructure / decisions, do before prod:
+#   * TLS: add an ACME resolver to the traefik `command` (e.g.
+#     --certificatesresolvers.le.acme.email=$INFRA_ACME_EMAIL,
+#     --certificatesresolvers.le.acme.tlschallenge=true,
+#     --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json) plus a
+#     persisted volume, and set `traefik.http.routers.*.tls.certresolver=le` /
+#     entrypoints=websecure on the routers. Needs a real domain + reachable host.
+#   * Docker secrets: move INFRA_PG_PASSWORD / INFRA_LOGTO_ADMIN_PASSWORD to
+#     `secrets:` with the `*_FILE` env convention. The registrator M2M file stays
+#     on the infra_init_data volume (it is generated at runtime by logto-init),
+#     which is why logto-init and registrator are pinned to the same node below.
+#
+# Resource limits are conservative starting points — tune to your node sizes.
+
+configs:
+  krakend_bootstrap:
+    file: ./config/krakend/krakend.json
+
 services:
   traefik:
     deploy:
@@ -8,6 +35,11 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
 
   postgres:
     deploy:
@@ -18,6 +50,11 @@ services:
       placement:
         constraints:
           - node.labels.infra.postgres == true
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
   redis:
     deploy:
@@ -25,6 +62,23 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  nats:
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
 
   logto:
     deploy:
@@ -35,8 +89,33 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # One-shot init job: seeds Logto config and writes the registrator M2M creds.
+  # restart_policy condition: none → runs to completion and stays exited.
+  # Pinned to the same node as the registrator so they share infra_init_data.
+  logto-init:
+    image: ${INFRA_LOGTO_INIT_IMAGE:-logto-init:latest}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
 
   krakend:
+    configs:
+      - source: krakend_bootstrap
+        target: /etc/krakend/krakend.json
+        mode: 0444
     deploy:
       replicas: 1
       restart_policy:
@@ -45,6 +124,27 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  service-core:
+    image: ${INFRA_SERVICE_CORE_IMAGE:-service-core:latest}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
 
   service-a:
     image: ${INFRA_SERVICE_A_IMAGE:-service-a:latest}
@@ -56,9 +156,18 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
 
   registrator:
     image: ${INFRA_REGISTRATOR_IMAGE:-registrator:latest}
+    environment:
+      # Artifact mode (inferred from swarm) delivers a config object and rolls
+      # this service. Stack name `infra` → service name `infra_krakend`.
+      INFRA_KRAKEND_SERVICE: ${INFRA_KRAKEND_SERVICE:-infra_krakend}
     deploy:
       replicas: 1
       restart_policy:
@@ -67,6 +176,15 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+      # Needs the Docker socket (manager) and shares infra_init_data with logto-init.
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
 
   swagger:
     deploy:
@@ -74,3 +192,24 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+
+  admin:
+    image: ${INFRA_ADMIN_IMAGE:-admin:latest}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      update_config:
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M

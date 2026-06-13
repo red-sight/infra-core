@@ -35,6 +35,9 @@ services:
         condition: service_healthy
 
   krakend:
+    # Dev: KrakenD reads the file the registrator writes (auto mode).
+    volumes:
+      - ./config/krakend:/etc/krakend:ro
     depends_on:
       logto:
         condition: service_healthy
@@ -65,6 +68,9 @@ services:
       target: dev
     volumes:
       - ./registrator:/app
+      # Auto mode writes the KrakenD config file and the aggregated openapi spec.
+      - ./config/krakend:/etc/krakend
+      - ./config/openapi:/specs
     depends_on:
       krakend:
         condition: service_healthy

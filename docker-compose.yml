@@ -196,8 +196,8 @@ services:
     restart: unless-stopped
     networks:
       - infra
-    volumes:
-      - ./config/krakend:/etc/krakend:ro
+    # Config delivery differs by environment: the override mounts ./config/krakend
+    # (dev, registrator writes the file); the swarm file delivers a config object.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__health || exit 1"]
       interval: 10s
@@ -217,9 +217,10 @@ services:
       - infra
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./config/krakend:/etc/krakend
-      - ./config/openapi:/specs
       - infra_init_data:/run/infra:ro
+      # The ./config/krakend (write) and ./config/openapi binds are auto-mode
+      # (dev) only and live in the override; in swarm the registrator delivers a
+      # config object instead of writing a file.
     environment:
       INFRA_MODE: ${INFRA_MODE:-}
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
