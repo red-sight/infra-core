@@ -16,6 +16,7 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 | Variable | Default | Description |
 |---|---|---|
 | `INFRA_MODE` | auto-detect | `compose` or `swarm` — overrides auto-detection |
+| `INFRA_REGISTRATOR_RELOAD_MODE` | inferred | `auto` or `artifact`. Default inferred from `INFRA_MODE`: compose→`auto`, swarm→`artifact`. `auto` restarts the local KrakenD container on change (dev); `artifact` regenerates only and never restarts KrakenD autonomously — applying is a gated deploy step (prod) |
 | `INFRA_HTTP_PROTOCOL` | `http` | `http` or `https` |
 | `INFRA_HTTP_BASE_DOMAIN` | `app.localhost` | base domain |
 | `INFRA_HTTP_OIDC_SUBDOMAIN` | `auth` | OIDC subdomain prefix |
@@ -67,10 +68,14 @@ The debounce timer resets on every new `ServiceEvent`. When it fires (after `INF
 
 1. Fetch OpenAPI spec from each healthy registered service
 2. Query Logto Management API for current scope→role mappings
-3. Generate new `config/krakend/krakend.json`
-4. Restart the KrakenD container
+3. Generate new `config/krakend/krakend.json` (written atomically; skipped if the rendered config is unchanged)
+4. Deliver, per `INFRA_REGISTRATOR_RELOAD_MODE`:
+   - `auto` (dev): restart the local KrakenD container so it re-reads the config.
+   - `artifact` (prod): do nothing — KrakenD is never restarted autonomously; applying the regenerated config is a gated deploy step.
 
-In Swarm, KrakenD's `update_config: order: start-first` ensures the new replica is healthy before the old one stops — no dropped requests during reload.
+Generation is identical in both modes; only step 4 differs. Steps 1–4 are serialized by a mutex so the debounce timer and the poll ticker never generate concurrently.
+
+> The prod `artifact` path — running as a one-shot deploy job, delivering the config as an immutable Swarm config object, and the per-service `info.version` gate — is being built incrementally. The current `artifact` reloader only enforces the "no autonomous reload" guarantee.
 
 ## RBAC — scope→role resolution
 

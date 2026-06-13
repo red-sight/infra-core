@@ -66,6 +66,16 @@ func main() {
 
 	logtoClient := logto.New()
 
+	rmode := resolveReloadMode(mode)
+	log.Printf("reload mode: %s", rmode)
+	var rl reloader
+	switch rmode {
+	case modeArtifact:
+		rl = artifactReloader{}
+	default:
+		rl = autoReloader{docker: docker}
+	}
+
 	debounceDelay := parseDelay(env("INFRA_REGISTRATOR_RELOAD_DELAY", "5s"))
 	pollInterval := parseDelay(env("INFRA_REGISTRATOR_POLL_INTERVAL", "30s"))
 
@@ -80,7 +90,7 @@ func main() {
 			timer.Stop()
 		}
 		timer = time.AfterFunc(debounceDelay, func() {
-			reload(registry, agg, gen, logtoClient, docker)
+			reload(registry, agg, gen, logtoClient, rl)
 		})
 	}
 
@@ -113,7 +123,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if len(registry.Services()) > 0 {
-				reload(registry, agg, gen, logtoClient, docker)
+				reload(registry, agg, gen, logtoClient, rl)
 			}
 		}
 	}()
@@ -125,62 +135,6 @@ func main() {
 
 	log.Println("listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
-}
-
-// reloadMu serializes reload across its two callers — the debounce timer and the
-// poll ticker — so they cannot generate and write the config concurrently.
-var reloadMu sync.Mutex
-
-func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client, docker *registrar.DockerClient) {
-	reloadMu.Lock()
-	defer reloadMu.Unlock()
-
-	services := registry.Services()
-
-	opServices := make([]openapi.ServiceInfo, len(services))
-	gwServices := make([]gateway.ServiceInfo, len(services))
-	for i, svc := range services {
-		opServices[i] = openapi.ServiceInfo{
-			Name:          svc.Name,
-			Port:          svc.Port,
-			OpenAPIRoute:  svc.OpenAPIRoute,
-			AuthProtected: svc.AuthProtected,
-		}
-		gwServices[i] = gateway.ServiceInfo{
-			Name:          svc.Name,
-			Port:          svc.Port,
-			OpenAPIRoute:  svc.OpenAPIRoute,
-			AuthProtected: svc.AuthProtected,
-		}
-	}
-
-	opChanged, err := agg.Aggregate(opServices)
-	if err != nil {
-		log.Printf("openapi aggregate: %v", err)
-	}
-
-	scopeRoles, err := lc.ScopeRoles()
-	if err != nil {
-		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
-	}
-
-	gwChanged, err := gen.Generate(gwServices, scopeRoles)
-	if err != nil {
-		log.Printf("krakend config: %v", err)
-		return
-	}
-
-	if !opChanged && !gwChanged {
-		return // nothing changed, skip KrakenD restart
-	}
-
-	log.Printf("reload: %d service(s), openapi=%v krakend=%v", len(services), opChanged, gwChanged)
-
-	if err := docker.RestartContainerByLabel("com.docker.compose.service=krakend"); err != nil {
-		log.Printf("krakend restart: %v", err)
-	} else {
-		log.Println("krakend restarting")
-	}
 }
 
 func parseDelay(s string) time.Duration {
