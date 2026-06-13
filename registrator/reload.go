@@ -38,36 +38,63 @@ func resolveReloadMode(dockerMode string) reloadMode {
 	}
 }
 
-// reloader performs the "last mile" after a config regeneration. Both modes share
-// the same generation; only delivery differs.
-type reloader interface {
-	deliver(res genResult) error
+// passRunner performs one full generate+deliver pass. The modes diverge before
+// delivery (auto writes the local config and restarts the container; artifact
+// renders and delivers a Swarm config object without writing local files), so
+// each is its own runner rather than a shared generate()-then-deliver() split.
+type passRunner interface {
+	run()
 }
 
-// autoReloader restarts the local KrakenD container so it re-reads the freshly
-// written config. For local dev only: restart is cheap with no production traffic.
-type autoReloader struct {
-	docker *registrar.DockerClient
+// autoRunner (dev): regenerate the local files and restart the local KrakenD
+// container so it re-reads the config. Restart is cheap with no prod traffic.
+type autoRunner struct {
+	registry *registrar.Registry
+	agg      *openapi.Aggregator
+	gen      *gateway.Generator
+	lc       *logto.Client
+	docker   *registrar.DockerClient
 }
 
-func (a autoReloader) deliver(genResult) error {
-	if err := a.docker.RestartContainerByLabel("com.docker.compose.service=krakend"); err != nil {
-		return err
+func (a *autoRunner) run() {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+
+	res := generate(a.registry, a.agg, a.gen, a.lc)
+	if !res.changed() {
+		return
 	}
-	log.Println("krakend restarting")
-	return nil
+	log.Printf("reload: %d service(s), openapi=%v krakend=%v", res.serviceCount, res.openapiChanged, res.krakendChanged)
+	if err := a.docker.RestartContainerByLabel("com.docker.compose.service=krakend"); err != nil {
+		log.Printf("krakend restart: %v", err)
+	} else {
+		log.Println("krakend restarting")
+	}
 }
 
-// artifactReloader is the production last mile: the config is regenerated and
-// written, but KrakenD is never restarted autonomously — applying it is a
-// separate, gated deploy step (no API appears on the fly). Artifact emission —
-// immutable config object, contract-hash version gate — lands in a later phase;
-// for now this only enforces the "no autonomous reload" guarantee.
-type artifactReloader struct{}
+// artifactRunner (prod): render the config, enforce the per-service version gate,
+// and deliver it as an immutable Swarm config object, rolling the KrakenD service
+// onto it. Never writes local files or restarts a container autonomously.
+type artifactRunner struct {
+	registry       *registrar.Registry
+	gen            *gateway.Generator
+	lc             *logto.Client
+	docker         *registrar.DockerClient
+	krakendService string
+	configTarget   string
+}
 
-func (artifactReloader) deliver(res genResult) error {
-	log.Printf("artifact mode: config regenerated (%d service(s)); not restarting KrakenD — apply is a gated deploy step", res.serviceCount)
-	return nil
+func (a *artifactRunner) run() {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+
+	scopeRoles, err := a.lc.ScopeRoles()
+	if err != nil {
+		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
+	}
+	if err := deliverArtifact(a.gen, a.docker, gatewayServices(a.registry), scopeRoles, a.krakendService, a.configTarget); err != nil {
+		log.Printf("artifact delivery: %v", err)
+	}
 }
 
 // genResult reports what a single generation pass produced.
@@ -79,9 +106,6 @@ type genResult struct {
 
 func (r genResult) changed() bool { return r.openapiChanged || r.krakendChanged }
 
-// generate snapshots the registry, rebuilds the aggregated OpenAPI spec and the
-// KrakenD config (writing both atomically as a side effect), and reports what
-// changed. It never restarts anything — that is the reloader's responsibility.
 // scanOnce performs a single synchronous discovery pass and populates the registry
 // with the eligible (healthy, non-removed) services it finds. Returns the count.
 func scanOnce(adapter registrar.EnvironmentAdapter, registry *registrar.Registry) int {
@@ -126,6 +150,8 @@ func openapiServices(registry *registrar.Registry) []openapi.ServiceInfo {
 	return out
 }
 
+// generate (auto mode) rebuilds the aggregated OpenAPI spec and the KrakenD
+// config, writing both atomically as a side effect, and reports what changed.
 func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client) genResult {
 	res := genResult{serviceCount: len(registry.Services())}
 
@@ -150,22 +176,6 @@ func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gatewa
 	return res
 }
 
-// reloadMu serializes reload across its callers — the debounce timer and the poll
-// ticker — so they cannot generate and write the config concurrently.
+// reloadMu serializes a runner's pass across its callers — the debounce timer and
+// the poll ticker — so they cannot generate/deliver concurrently.
 var reloadMu sync.Mutex
-
-// reload regenerates the config and, if anything changed, hands delivery to the reloader.
-func reload(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client, r reloader) {
-	reloadMu.Lock()
-	defer reloadMu.Unlock()
-
-	res := generate(registry, agg, gen, lc)
-	if !res.changed() {
-		return // nothing changed, skip delivery
-	}
-
-	log.Printf("reload: %d service(s), openapi=%v krakend=%v", res.serviceCount, res.openapiChanged, res.krakendChanged)
-	if err := r.deliver(res); err != nil {
-		log.Printf("deliver: %v", err)
-	}
-}

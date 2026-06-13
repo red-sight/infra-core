@@ -472,9 +472,9 @@ func (d *DockerClient) UpdateServiceConfig(serviceName, targetPath, configID, co
 	return expectStatus(resp, "service update")
 }
 
-// serviceConfigNames returns the config object names currently mounted in a
+// ServiceConfigNames returns the config object names currently mounted in a
 // service's ContainerSpec.
-func (d *DockerClient) serviceConfigNames(serviceName string) ([]string, error) {
+func (d *DockerClient) ServiceConfigNames(serviceName string) ([]string, error) {
 	svc, err := d.serviceByName(serviceName)
 	if err != nil || svc == nil {
 		return nil, err

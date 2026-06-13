@@ -81,12 +81,19 @@ func main() {
 
 	rmode := resolveReloadMode(mode)
 	log.Printf("reload mode: %s", rmode)
-	var rl reloader
+	var runner passRunner
 	switch rmode {
 	case modeArtifact:
-		rl = artifactReloader{}
+		runner = &artifactRunner{
+			registry:       registry,
+			gen:            gen,
+			lc:             logtoClient,
+			docker:         docker,
+			krakendService: env("INFRA_KRAKEND_SERVICE", "infra_krakend"),
+			configTarget:   env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
+		}
 	default:
-		rl = autoReloader{docker: docker}
+		runner = &autoRunner{registry: registry, agg: agg, gen: gen, lc: logtoClient, docker: docker}
 	}
 
 	// One-shot modes: a single synchronous scan, then act and exit. No watcher,
@@ -109,7 +116,7 @@ func main() {
 	if *once {
 		n := scanOnce(adapter, registry)
 		log.Printf("once: %d service(s)", n)
-		reload(registry, agg, gen, logtoClient, rl)
+		runner.run()
 		return
 	}
 
@@ -126,9 +133,7 @@ func main() {
 		if timer != nil {
 			timer.Stop()
 		}
-		timer = time.AfterFunc(debounceDelay, func() {
-			reload(registry, agg, gen, logtoClient, rl)
-		})
+		timer = time.AfterFunc(debounceDelay, runner.run)
 	}
 
 	// React to Docker health events.
@@ -160,7 +165,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if len(registry.Services()) > 0 {
-				reload(registry, agg, gen, logtoClient, rl)
+				runner.run()
 			}
 		}
 	}()

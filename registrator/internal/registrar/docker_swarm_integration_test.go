@@ -53,7 +53,7 @@ func TestConfigDeliverySwarm(t *testing.T) {
 		t.Fatalf("docker service create: %v\n%s", err, out)
 	}
 
-	if names, _ := d.serviceConfigNames(svc); !slices.Contains(names, cfgA) {
+	if names, _ := d.ServiceConfigNames(svc); !slices.Contains(names, cfgA) {
 		t.Fatalf("service should mount %s, got %v", cfgA, names)
 	}
 
@@ -71,7 +71,7 @@ func TestConfigDeliverySwarm(t *testing.T) {
 	}
 
 	// 4. The service now references config B, not A.
-	names, err := d.serviceConfigNames(svc)
+	names, err := d.ServiceConfigNames(svc)
 	if err != nil {
 		t.Fatalf("serviceConfigNames: %v", err)
 	}

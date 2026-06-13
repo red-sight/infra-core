@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"infra/registrator/internal/fsutil"
+	"infra/registrator/internal/versiongate"
 )
 
 // Config holds the runtime configuration for KrakenD config generation.
@@ -64,7 +65,7 @@ func (g *Generator) SetValidator(fn func(candidatePath string) error) {
 // scopeRoles maps scope name → role names that hold that scope; nil means roles are unavailable
 // (Logto init not yet complete) and the generator falls back to scope-based validation.
 func (g *Generator) Generate(services []ServiceInfo, scopeRoles map[string][]string) (bool, error) {
-	data, endpoints, err := g.build(services, scopeRoles)
+	data, endpoints, _, err := g.build(services, scopeRoles)
 	if err != nil {
 		return false, err
 	}
@@ -127,15 +128,24 @@ func logDenyAllEndpoints(endpoints []interface{}) {
 // writing, validating, or touching the change-detection hash. Used by --dry-run
 // to preview exactly what would be generated.
 func (g *Generator) Render(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, error) {
-	data, _, err := g.build(services, scopeRoles)
+	data, _, _, err := g.build(services, scopeRoles)
 	return data, err
 }
 
+// RenderWithDigests is Render plus a per-service digest (info.version + contract
+// hash) used by the artifact-mode version gate. Computed from the same fetched
+// specs, so it costs no extra requests.
+func (g *Generator) RenderWithDigests(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, map[string]versiongate.Digest, error) {
+	data, _, digests, err := g.build(services, scopeRoles)
+	return data, digests, err
+}
+
 // build fetches every service spec, derives the KrakenD endpoints, and marshals
-// the complete config. It returns both the bytes and the endpoint list (the
-// latter for change-time logging in Generate).
-func (g *Generator) build(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, []interface{}, error) {
+// the complete config. It returns the bytes, the endpoint list (for change-time
+// logging in Generate), and a per-service digest (for the version gate).
+func (g *Generator) build(services []ServiceInfo, scopeRoles map[string][]string) ([]byte, []interface{}, map[string]versiongate.Digest, error) {
 	var endpoints []interface{}
+	digests := make(map[string]versiongate.Digest)
 	for _, svc := range services {
 		raw, err := g.fetchSpec(svc)
 		if err != nil {
@@ -143,13 +153,17 @@ func (g *Generator) build(services []ServiceInfo, scopeRoles map[string][]string
 			continue
 		}
 		endpoints = append(endpoints, g.endpointsFromSpec(svc, raw, scopeRoles)...)
+		digests[svc.Name] = versiongate.Digest{
+			Version:      specVersion(raw),
+			ContractHash: versiongate.ContractHash(raw),
+		}
 	}
 
 	data, err := g.marshalConfig(endpoints)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return data, endpoints, nil
+	return data, endpoints, digests, nil
 }
 
 // --- spec fetching (mirrors openapi package — kept separate to avoid cross-package dependency) ---
