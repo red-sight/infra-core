@@ -341,14 +341,21 @@ async function main() {
     console.log('Admin user already in t-default organization.');
   }
 
-  // Write Registrator M2M credentials to shared volume
-  fs.mkdirSync('/run/infra', { recursive: true });
+  // Write Registrator M2M credentials to shared volume.
+  // The file holds a plaintext clientSecret, so restrict it to the owner (0600)
+  // inside an owner-only directory (0700). The registrator runs as root and can
+  // still read it. For Swarm, prefer a Docker secret over this shared volume.
+  fs.mkdirSync('/run/infra', { recursive: true, mode: 0o700 });
   fs.writeFileSync('/run/infra/registrator-m2m.json', JSON.stringify({
     clientId: 'm-default',
     clientSecret: defaultSecret,
     tokenEndpoint: LOGTO_ADMIN_ENDPOINT,
     apiEndpoint: LOGTO_ENDPOINT,
-  }));
+  }), { mode: 0o600 });
+  // mode in mkdir/writeFile only applies on creation; logto-init reruns on every
+  // compose up, so chmod explicitly to enforce perms on a pre-existing dir/file.
+  fs.chmodSync('/run/infra', 0o700);
+  fs.chmodSync('/run/infra/registrator-m2m.json', 0o600);
   console.log('Registrator M2M credentials written to /run/infra/registrator-m2m.json.');
 
   // Mark onboarding complete

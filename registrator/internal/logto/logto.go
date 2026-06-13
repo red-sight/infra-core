@@ -14,6 +14,10 @@ import (
 
 const credentialsPath = "/run/infra/registrator-m2m.json"
 
+// httpTimeout bounds every outbound Logto request so one hung call cannot stall
+// the whole reload cycle (these all run under the reload mutex).
+const httpTimeout = 10 * time.Second
+
 type credentials struct {
 	ClientID      string `json:"clientId"`
 	ClientSecret  string `json:"clientSecret"`
@@ -36,10 +40,11 @@ type Client struct {
 	token    string
 	tokenExp time.Time
 	creds    *credentials
+	http     *http.Client
 }
 
 func New() *Client {
-	return &Client{}
+	return &Client{http: &http.Client{Timeout: httpTimeout}}
 }
 
 // ScopeRoles returns a map of scope name → role names that have that scope.
@@ -123,7 +128,7 @@ func (c *Client) getToken() (string, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(c.creds.ClientID, c.creds.ClientSecret)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("logto: token request: %w", err)
 	}
@@ -196,7 +201,7 @@ func (c *Client) get(token, path string, out interface{}) error {
 	req, _ := http.NewRequest("GET", c.creds.APIEndpoint+path, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("logto: GET %s: %w", path, err)
 	}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"infra/registrator/internal/fsutil"
 )
@@ -33,16 +34,21 @@ type ServiceInfo struct {
 	AuthProtected bool
 }
 
+// specFetchTimeout bounds each service spec fetch so one hung service cannot
+// stall the whole reload cycle.
+const specFetchTimeout = 10 * time.Second
+
 // Generator reads service OpenAPI specs and writes a complete krakend.json.
 type Generator struct {
 	cfg      Config
 	mu       sync.Mutex
 	hash     [32]byte
 	validate func(candidatePath string) error // optional; run on the candidate before promoting it
+	http     *http.Client
 }
 
 func New(cfg Config) *Generator {
-	return &Generator{cfg: cfg}
+	return &Generator{cfg: cfg, http: &http.Client{Timeout: specFetchTimeout}}
 }
 
 // SetValidator installs a validation hook run against the freshly written
@@ -150,7 +156,7 @@ func (g *Generator) build(services []ServiceInfo, scopeRoles map[string][]string
 
 func (g *Generator) fetchSpec(svc ServiceInfo) (map[string]interface{}, error) {
 	url := fmt.Sprintf("http://%s:%d/%s", svc.Name, svc.Port, svc.OpenAPIRoute)
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := g.http.Get(url) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}

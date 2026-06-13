@@ -42,14 +42,18 @@
 
 **Фикс:** `{ mode: 0o600 }` и `mkdirSync(..., { mode: 0o700 })`; для Swarm — Docker secrets.
 
+**Статус: исправлено (2026-06-13).** M2M-файл пишется с `mode: 0o600` в директории `0o700`, плюс явные `chmodSync` после записи (логта-init перезапускается на каждый `compose up`, а `mode` в `writeFile`/`mkdir` применяется только при создании). Registrator идёт под root (scratch, без `USER`), поэтому root читает файл независимо от битов. Для Swarm Docker secrets — остаётся для Фазы 4.
+
 ### 6. `/admin/organizations` доступен любому аутентифицированному пользователю
 
 service-core не объявляет `x-infra-scopes` (только `x-infra-protected`), хотя скоуп `read:organizations` существует в `logto.config.yaml` и назначен роли admin. `list()` (`service-core/internal/organization/organization.go:79-105`) не фильтрует по `x-organization-id` — любой залогиненный пользователь видит все организации. Нарушение собственного контракта (service-a его соблюдает через `@InfraAuth`) и утечка данных.
 
+**Статус: разрешено (2026-06-13).** Утечка доступа закрыта: `organization.go` (создан в `0262bc4`, после ревью) уже объявляет `x-infra-scopes: [read:organizations]` на `list-organizations`, скоуп определён в `logto.config.yaml` и назначен admin-роли — эндпоинт больше не доступен любому JWT, только admin. Тенант-фильтрация по `x-organization-id` здесь **не применяется намеренно**: это платформенный admin-эндпоинт (`/admin/organizations`, тег Admin, scope `read:organizations`), который по смыслу перечисляет все организации; фильтрация сломала бы его назначение. Других organization-эндпоинтов нет. Кода не меняли.
+
 ## Важное
 
 - **Бэкенды слепо доверяют `x-user-id` / `x-user-roles` / `x-organization-id`**, все сервисы в одной плоской сети `infra`. KrakenD корректно отрезает клиентские заголовки (`input_headers: ["Authorization"]`), но любой контейнер в сети может обратиться к бэкенду напрямую, минуя гейтвей. Зафиксировать trust boundary в AGENTS.md; дальше — сегментация сетей (бэкенды в отдельной сети, доступной только KrakenD) либо подписанный заголовок/секрет от гейтвея.
-- **Нет таймаутов на исходящих HTTP**: `http.Get` для спек сервисов (`gateway.go:110`, `openapi/openapi.go:157`) и Logto-клиент. Один зависший сервис блокирует весь reload-цикл; токен Logto фетчится под мьютексом (`logto/logto.go:110-147`).
+- **Нет таймаутов на исходящих HTTP**: `http.Get` для спек сервисов (`gateway.go:110`, `openapi/openapi.go:157`) и Logto-клиент. Один зависший сервис блокирует весь reload-цикл; токен Logto фетчится под мьютексом (`logto/logto.go:110-147`). **Исправлено (2026-06-13):** gateway, openapi и logto держат собственный `*http.Client` с `Timeout: 10s` (как `DockerClient`) вместо `http.Get`/`http.DefaultClient`; зависший сервис больше не стопорит reload бесконечно.
 - **N+1 к Logto**: roles → по одному запросу скоупов на роль, последовательно (`logto.go:149-187`). При росте числа ролей станет узким местом каждого reload.
 - **Дубликаты путей между сервисами не детектируются** (`gateway.go:58`) — второй сервис с тем же `path+method` молча теряется.
 - **Секреты в env**: дефолтные `postgres`/`changeme` в `.env`, креды Postgres в env у всех сервисов. Для Compose-дева нормально, для Swarm — Docker secrets и обязательность сильных паролей без дефолта.
@@ -67,11 +71,11 @@ service-core не объявляет `x-infra-scopes` (только `x-infra-pro
 
 ## Приоритет исправлений
 
-1. Fail-closed для скоупов при недоступном Logto (п.1) — правка `resolveRoles` + `Generate`.
-2. Мьютекс на `reload` + атомарная запись через rename (п.2) — небольшая правка, убирает целый класс отказов.
-3. `x-infra-scopes: [read:organizations]` на service-core + тенант-фильтрация (п.6).
-4. Swarm: добавить `logto-init` (одноразовый запуск), TLS, secrets, resource limits; починить рестарт KrakenD по Swarm-метке (п.3, 4).
-5. `mode: 0o600` на M2M-файл (п.5) — однострочник.
-6. Таймауты на все исходящие HTTP-клиенты.
+1. ✅ Fail-closed для скоупов при недоступном Logto (п.1) — правка `resolveRoles` + `Generate`.
+2. ✅ Мьютекс на `reload` + атомарная запись через rename (п.2).
+3. ✅ `x-infra-scopes: [read:organizations]` на service-core (п.6) — уже объявлен (тенант-фильтрация неприменима к admin-эндпоинту, см. п.6).
+4. Swarm: добавить `logto-init` (одноразовый запуск), TLS, secrets, resource limits; доставка KrakenD-конфига как config object (п.3, 4) — **Фаза 4**, требует Swarm-кластера.
+5. ✅ `mode: 0o600` на M2M-файл (п.5).
+6. ✅ Таймауты на все исходящие HTTP-клиенты.
 
-Пункты 1, 2, 5 — маленькие диффы с большим эффектом.
+Остаётся только п.4 (Swarm-доставка, Фаза 4). Пункты 1, 2, 5, 6 закрыты на ветке `logto` 2026-06-13; п.3 был уже закрыт scope-гейтом.

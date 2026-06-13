@@ -9,9 +9,14 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"infra/registrator/internal/fsutil"
 )
+
+// specFetchTimeout bounds each service spec fetch so one hung service cannot
+// stall aggregation.
+const specFetchTimeout = 10 * time.Second
 
 // Config holds the runtime configuration for the aggregator.
 type Config struct {
@@ -36,11 +41,12 @@ type Aggregator struct {
 	mu      sync.RWMutex
 	current []byte
 	hash    [32]byte
+	http    *http.Client
 }
 
 // New creates an Aggregator with the given configuration.
 func New(cfg Config) *Aggregator {
-	return &Aggregator{cfg: cfg}
+	return &Aggregator{cfg: cfg, http: &http.Client{Timeout: specFetchTimeout}}
 }
 
 // Aggregate fetches specs from all services, merges them, and writes to SpecsPath/openapi.json
@@ -155,7 +161,7 @@ func (a *Aggregator) buildAggregated(services []ServiceInfo) map[string]interfac
 
 func (a *Aggregator) fetchSpec(svc ServiceInfo) (map[string]interface{}, error) {
 	url := fmt.Sprintf("http://%s:%d/%s", svc.Name, svc.Port, svc.OpenAPIRoute)
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := a.http.Get(url) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
