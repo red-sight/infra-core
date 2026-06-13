@@ -2,3 +2,6 @@ node_modules
 .env
 .env.*
 !.env.example
+
+# Claude Code: share project settings, keep personal/local settings out
+.claude/settings.local.json
