@@ -1,9 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light" data-density="comfortable">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Admin</title>
+    <title>Helm · Admin Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Apply persisted theme/density before first paint to avoid a flash. -->
+    <script>
+      try {
+        var t = JSON.parse(localStorage.getItem('helm.tweaks') || '{}')
+        if (t.theme) document.documentElement.setAttribute('data-theme', t.theme)
+        if (t.density) document.documentElement.setAttribute('data-density', t.density)
+      } catch (e) {}
+    </script>
     <!-- Injected at runtime by docker-entrypoint-prod.sh (prod) or absent in dev -->
     <script src="/config.js" onerror="void 0"></script>
   </head>

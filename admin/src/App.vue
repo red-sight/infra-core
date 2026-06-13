@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { useColorMode } from '@vueuse/core'
+import { useTweaks } from '@/composables/useTweaks'
 
-// Initialize color mode — applies .dark class to <html> based on stored preference or system setting.
-useColorMode()
+// Start the tweaks controller — applies persisted theme / density / accent to
+// <html> and keeps it in sync.
+useTweaks()
 </script>
 
 <template>
