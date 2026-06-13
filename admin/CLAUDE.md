@@ -2,97 +2,128 @@
 
 ## Stack
 
-Vue 3 + Vite + TypeScript. shadcn-vue + Tailwind CSS for UI. `@logto/vue` for auth. `@tanstack/vue-query` for data fetching. Vue Router for routing.
+Vue 3 + Vite + TypeScript. `@logto/vue` for auth, `@tanstack/vue-query` for data
+fetching, Vue Router for routing.
+
+The UI is the **"Helm" design system** — a faithful, hand-authored port of a
+Claude Design export (not shadcn-vue, not a CLI-generated component set). Tokens
+and component styles live in `src/assets/{theme,components,shell}.css`; the Vue
+primitives that consume them live in `src/components/ui/`. Tailwind is present
+for incidental utilities, but the design system owns colors and component styling
+— prefer the design classes (`.btn`, `.card`, `.table`, `.page`, `.grid-kpi`, …)
+over Tailwind color/spacing utilities.
 
 ## Icons
 
-Always use **unplugin-icons** auto-imported components — never import from `lucide-vue-next` or any other icon library directly.
-
-`vite.config.ts` configures `Icons({ compiler: 'vue3' })` and `Components({ resolvers: [IconsResolver()] })`, so icon components are resolved automatically at build time with no explicit imports required.
-
-**Naming convention:** `I` + PascalCase collection + PascalCase icon name.
+Use the in-house `<Icon>` component from `src/components/ui/Icon.vue`:
 
 ```vue
-<!-- correct -->
-<ILucideMail class="size-4" />
-<ILucideArrowRight class="size-5" />
-
-<!-- wrong — do not do this -->
-import { Mail } from 'lucide-vue-next'
+<Icon name="mail" :size="15" />
+<Icon name="arrow-right" :size="14" />
 ```
 
-Size via Tailwind class (`size-4`, `size-5`, etc.), not `:size` prop.
+Icon paths are a lucide-derived map in `src/components/ui/icons.ts`. To add an
+icon, add its inner SVG markup to that map keyed by name — do **not** reach for a
+separate icon library. (`unplugin-icons` is still wired in `vite.config.ts` from
+the earlier scaffold, but the design system standardizes on `<Icon>` for visual
+consistency; don't mix the two.) Size via the `:size` prop, not a CSS class.
 
-Available collections: everything in `@iconify/json` (lucide, mdi, heroicons, …).
+## Theming and customization
+
+All colors are CSS custom properties in `src/assets/theme.css`. To change the
+theme, edit those variables — never hardcode color values in components; use
+`var(--token)` or the design CSS classes.
+
+- **Light/dark** is the `data-theme` attribute on `<html>` (`light` | `dark`) —
+  **not** a `.dark` class, and not `useColorMode`.
+- **Density** is the `data-density` attribute (`comfortable` | `compact`), which
+  drives the `--d-*` scale.
+- Both (plus brand accent) are owned by the **`useTweaks` composable**
+  (`src/composables/useTweaks.ts`): it applies them to `<html>` and persists to
+  `localStorage` under `helm.tweaks`. The topbar toggle calls it. `index.html`
+  re-applies the persisted theme/density before first paint to avoid a flash.
+
+## UI components
+
+The primitives in `src/components/ui/` are hand-authored SFCs (Button, Card,
+Badge, Input, Select, Switch, Avatar, Tabs, Segmented, Dropdown + Menu parts,
+Dialog, Sheet, Toast, Progress, IconChip, EmptyState, Tag, …). **Edit them
+directly** — there is no generator to overwrite them. Build screens by composing
+these primitives with the design CSS layout classes.
+
+Conventions worth matching when extending:
+- `icon` / `iconRight` props take an **icon name string** (e.g. `icon="download"`),
+  with `#icon` / `#iconRight` slots for overrides.
+- Components that re-bind `$attrs` set `defineOptions({ inheritAttrs: false })`.
+- Toasts: `const toast = useToast()` (`src/composables/useToast.ts`), then
+  `toast({ title, desc?, variant? })`. `<ToastRegion>` is mounted once in `AppLayout`.
+- Charts live in `src/components/charts/` (lightweight inline SVG).
+
+## Shell & navigation
+
+The app shell (`src/components/shell/`) is Sidebar, TopBar (⌘K command palette
+trigger, theme toggle, notifications), CommandPalette, MobileNav, and UserMenu
+(wired to real Logto identity + signOut). The nav model and screen→path map are
+in `shell/nav.ts`; **route names equal screen ids** so the active link derives
+from the current route.
+
+Navigate with the `useNav` composable: `const nav = useNav(); nav('organizations',
+{ open: orgId })`. Params become route query (deep-linkable, e.g. `?create=1`).
 
 ## Form validation
 
-Validate on blur to mark a field dirty, then re-validate on every keystroke while it is dirty — so the user gets immediate feedback as they correct an invalid value.
+Validate on blur to mark a field dirty, then re-validate on every keystroke while
+it is dirty — immediate feedback as the user corrects an invalid value. Never
+validate on keystroke alone; only after the field has been blurred once.
 
 ```ts
 const dirty = reactive({ email: false })
 const errors = reactive({ email: '' })
-
 watch(() => form.email, () => { if (dirty.email) errors.email = validateEmail() })
-
-function markDirty(field: 'email') {
-  dirty[field] = true
-  errors[field] = validate(field)
-}
+function markDirty(field: 'email') { dirty[field] = true; errors[field] = validate(field) }
 ```
-
-```vue
-<input @blur="markDirty('email')" />
-```
-
-Never validate on keystroke alone — only after the field has been blurred at least once.
-
-## Theming and customization
-
-All colors are CSS custom properties defined in `src/assets/index.css`. To change the theme, edit only the CSS variables in `:root` and `.dark` — never hardcode color values in components.
-
-Dark mode is controlled by the `dark` class on `<html>`. Use the `useColorMode()` composable from `@vueuse/core` — it supports `'auto'` (follows system), `'dark'`, and `'light'`.
-
-## shadcn-vue components
-
-Add components via CLI:
-```sh
-npx shadcn-vue@latest add <component>
-```
-
-Components are copied into `src/components/ui/`. Do not edit them unless customizing for the project — re-running the CLI will overwrite changes.
 
 ## Data fetching
 
-Use `@tanstack/vue-query` for all API calls:
-- `useQuery` for reads
-- `useMutation` for writes
-- Invalidate relevant queries after mutations
+Use `@tanstack/vue-query` for all real API calls (`useQuery` for reads,
+`useMutation` for writes, invalidate after mutations). API base URL comes from
+`import.meta.env.VITE_API_BASE_URL`.
 
-API base URL comes from `import.meta.env.VITE_API_BASE_URL`.
+The current screens render **mock data** from `src/lib/data.ts`. When wiring live
+data, replace those arrays with service-core / Logto queries — the screens depend
+only on the shapes exported there.
 
 ## Auth
 
-Use `useLogto()` composable for auth state and operations. The `AppLayout` component handles the auth guard — it redirects to Logto sign-in when `isAuthenticated` is false. Do not add auth checks elsewhere.
+Use `useLogto()` for auth state and operations. `AppLayout` handles the auth
+guard — it redirects to Logto sign-in when `isAuthenticated` is false. Do not add
+auth checks elsewhere.
 
-Access tokens for API calls:
 ```ts
 const { getAccessToken } = useLogto()
 const token = await getAccessToken(import.meta.env.VITE_LOGTO_API_RESOURCE)
 ```
 
+Runtime Logto config (appId, endpoint, apiResource) is loaded by the Docker
+entrypoint from `/run/infra/admin-app.json` (written by logto-init) into `VITE_*`
+vars; see `src/config.ts`.
+
 ## File structure
 
 ```
 src/
-  assets/        # global CSS only
+  assets/        # index.css (Tailwind) + theme/components/shell.css (design system)
   components/
-    ui/          # shadcn-vue components (generated)
-    layout/      # AppLayout, AppHeader, etc.
-  composables/   # shared Vue composables
+    ui/          # design-system primitives (hand-authored SFCs) + Icon + icons.ts
+    charts/      # inline-SVG charts
+    shell/       # Sidebar, TopBar, CommandPalette, MobileNav, UserMenu, nav.ts
+    layout/      # AppLayout (auth guard + shell)
+  composables/   # useTweaks, useNav, useToast
   lib/
+    data.ts      # mock data (replace with API calls)
+    types.ts
     utils.ts     # cn() and other helpers
-  pages/         # one file per route
+  pages/         # one file per route (Overview, Organizations, Users, …)
   router/
     index.ts
   main.ts
@@ -101,4 +132,5 @@ src/
 
 ## Environment variables
 
-All env vars are prefixed `VITE_`. See `.env.example` for the full list. Never hardcode URLs or IDs.
+All env vars are prefixed `VITE_`. See `.env.example` for the full list. Never
+hardcode URLs or IDs.
