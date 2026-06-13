@@ -342,10 +342,12 @@ async function main() {
   }
 
   // Write Registrator M2M credentials to shared volume.
-  // The file holds a plaintext clientSecret, so restrict it to the owner (0600)
-  // inside an owner-only directory (0700). The registrator runs as root and can
-  // still read it. For Swarm, prefer a Docker secret over this shared volume.
-  fs.mkdirSync('/run/infra', { recursive: true, mode: 0o700 });
+  // The file holds a plaintext clientSecret, so restrict it to the owner (0600).
+  // The directory is 0711 (traversable but not listable by others) so the non-root
+  // admin container can read its public config (admin-app.json, 0644) by known name,
+  // while the M2M secret stays owner-only. The registrator runs as root regardless.
+  // For Swarm, prefer a Docker secret over this shared volume.
+  fs.mkdirSync('/run/infra', { recursive: true, mode: 0o711 });
   fs.writeFileSync('/run/infra/registrator-m2m.json', JSON.stringify({
     clientId: 'm-default',
     clientSecret: defaultSecret,
@@ -354,7 +356,7 @@ async function main() {
   }), { mode: 0o600 });
   // mode in mkdir/writeFile only applies on creation; logto-init reruns on every
   // compose up, so chmod explicitly to enforce perms on a pre-existing dir/file.
-  fs.chmodSync('/run/infra', 0o700);
+  fs.chmodSync('/run/infra', 0o711);
   fs.chmodSync('/run/infra/registrator-m2m.json', 0o600);
   console.log('Registrator M2M credentials written to /run/infra/registrator-m2m.json.');
 
