@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -335,6 +336,169 @@ func (d *DockerClient) SwarmServices(label string) ([]SwarmService, error) {
 	defer resp.Body.Close()
 	var out []SwarmService
 	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
+// --- Swarm config objects & config delivery ---
+
+// ConfigSummary is the minimal shape of a Swarm config from GET /configs.
+type ConfigSummary struct {
+	ID   string `json:"ID"`
+	Spec struct {
+		Name   string            `json:"Name"`
+		Labels map[string]string `json:"Labels"`
+	} `json:"Spec"`
+}
+
+// CreateConfig creates an immutable Swarm config object and returns its ID.
+// Config objects are content-addressed by the caller (name = krakend-config-<hash>),
+// so a 409 name conflict means "identical config already delivered".
+func (d *DockerClient) CreateConfig(name string, data []byte, labels map[string]string) (string, error) {
+	body := map[string]interface{}{
+		"Name":   name,
+		"Labels": labels,
+		"Data":   base64.StdEncoding.EncodeToString(data),
+	}
+	resp, err := d.postJSON("/configs/create", body)
+	if err != nil {
+		return "", fmt.Errorf("create config: %w", err)
+	}
+	out, err := decodeOrError(resp, "create config", struct {
+		ID string `json:"ID"`
+	}{})
+	if err != nil {
+		return "", err
+	}
+	return out.ID, nil
+}
+
+// Configs returns Swarm config objects matching the given label filter (e.g.
+// "infra.managed=true").
+func (d *DockerClient) Configs(label string) ([]ConfigSummary, error) {
+	filters := fmt.Sprintf(`{"label":[%q]}`, label)
+	resp, err := d.get("/configs", url.Values{"filters": {filters}})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []ConfigSummary
+	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
+// RemoveConfig deletes a Swarm config object by ID. A config still in use by a
+// service cannot be removed (Docker returns an error) — remove it only after the
+// service has been updated off it.
+func (d *DockerClient) RemoveConfig(id string) error {
+	resp, err := d.httpDelete("/configs/" + id)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("remove config HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// swarmServiceDetail carries the parts of a service we need to update it: its ID,
+// the version index required by the update API, and the full spec to resubmit.
+type swarmServiceDetail struct {
+	ID      string                 `json:"ID"`
+	Version struct{ Index int }    `json:"Version"`
+	Spec    map[string]interface{} `json:"Spec"`
+}
+
+// serviceByName returns the service whose Spec.Name is exactly name (Docker's name
+// filter is a substring match, so we filter precisely). Returns nil if not found.
+func (d *DockerClient) serviceByName(name string) (*swarmServiceDetail, error) {
+	filters := fmt.Sprintf(`{"name":[%q]}`, name)
+	resp, err := d.get("/services", url.Values{"filters": {filters}})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []swarmServiceDetail
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if n, _ := out[i].Spec["Name"].(string); n == name {
+			return &out[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// UpdateServiceConfig points a service's ContainerSpec at configName (mounted at
+// targetPath) and bumps ForceUpdate, triggering a rolling restart. This is the
+// Swarm equivalent of the auto-mode container restart: the service rolls onto the
+// new config object with order:start-first (set in the stack).
+func (d *DockerClient) UpdateServiceConfig(serviceName, targetPath, configID, configName string) error {
+	svc, err := d.serviceByName(serviceName)
+	if err != nil {
+		return fmt.Errorf("inspect service %q: %w", serviceName, err)
+	}
+	if svc == nil {
+		return fmt.Errorf("service %q not found", serviceName)
+	}
+
+	tt, ok := svc.Spec["TaskTemplate"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("service %q: no TaskTemplate", serviceName)
+	}
+	cs, ok := tt["ContainerSpec"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("service %q: no ContainerSpec", serviceName)
+	}
+
+	cs["Configs"] = []interface{}{
+		map[string]interface{}{
+			"ConfigID":   configID,
+			"ConfigName": configName,
+			"File": map[string]interface{}{
+				"Name": targetPath,
+				"UID":  "0",
+				"GID":  "0",
+				"Mode": 0o444,
+			},
+		},
+	}
+	tt["ForceUpdate"] = forceUpdateNext(tt["ForceUpdate"])
+
+	resp, err := d.postJSON(fmt.Sprintf("/services/%s/update?version=%d", svc.ID, svc.Version.Index), svc.Spec)
+	if err != nil {
+		return fmt.Errorf("update service %q: %w", serviceName, err)
+	}
+	return expectStatus(resp, "service update")
+}
+
+// serviceConfigNames returns the config object names currently mounted in a
+// service's ContainerSpec.
+func (d *DockerClient) serviceConfigNames(serviceName string) ([]string, error) {
+	svc, err := d.serviceByName(serviceName)
+	if err != nil || svc == nil {
+		return nil, err
+	}
+	tt, _ := svc.Spec["TaskTemplate"].(map[string]interface{})
+	cs, _ := tt["ContainerSpec"].(map[string]interface{})
+	configs, _ := cs["Configs"].([]interface{})
+	var names []string
+	for _, c := range configs {
+		if cm, ok := c.(map[string]interface{}); ok {
+			if n, ok := cm["ConfigName"].(string); ok {
+				names = append(names, n)
+			}
+		}
+	}
+	return names, nil
+}
+
+// forceUpdateNext increments the ForceUpdate counter (JSON numbers decode as float64).
+func forceUpdateNext(v interface{}) int {
+	if f, ok := v.(float64); ok {
+		return int(f) + 1
+	}
+	return 1
 }
 
 // --- Event streaming ---
