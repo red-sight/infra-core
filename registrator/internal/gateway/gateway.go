@@ -244,9 +244,12 @@ func (g *Generator) buildEndpoint(method, gatewayPath, backendPath, host string,
 		"host":        []string{host},
 		"encoding":    "json",
 		"extra_config": map[string]interface{}{
+			// return_error_code propagates the backend's HTTP status (404/409/422/…)
+			// to the client. It is an alternative to return_error_details — setting
+			// both makes KrakenD ignore the code and reply 200 (X-Krakend-Completed:
+			// false), silently masking backend errors.
 			"backend/http": map[string]interface{}{
-				"return_error_details": "backend",
-				"return_error_code":    true,
+				"return_error_code": true,
 			},
 		},
 	}

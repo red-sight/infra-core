@@ -37,12 +37,14 @@ func corsAllowOrigins() []string {
 		}
 		return origins
 	}
-	adminOrigin := fmt.Sprintf("%s://%s.%s",
-		env("INFRA_HTTP_PROTOCOL", "http"),
-		env("INFRA_ADMIN_SUBDOMAIN", "admin"),
-		env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
-	)
-	return []string{adminOrigin}
+	protocol := env("INFRA_HTTP_PROTOCOL", "http")
+	base := env("INFRA_HTTP_BASE_DOMAIN", "app.localhost")
+	adminOrigin := fmt.Sprintf("%s://%s.%s", protocol, env("INFRA_ADMIN_SUBDOMAIN", "admin"), base)
+	// Wildcard covers every tenant frontend subdomain (<slug>.<base>); KrakenD's
+	// CORS (rs/cors) supports a single '*' in the origin pattern. allow_credentials
+	// stays false, so breadth here does not grant access — the JWT is still validated.
+	tenantWildcard := fmt.Sprintf("%s://*.%s", protocol, base)
+	return []string{adminOrigin, tenantWildcard}
 }
 
 func main() {
