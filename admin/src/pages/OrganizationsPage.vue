@@ -61,25 +61,63 @@ const selected = ref<Organization | null>(null)
 
 /* ── Create-organization form ──────────────────────────────── */
 const creating = ref(false)
-const f = reactive({ name: '', description: '' })
-const dirty = reactive({ name: false })
-const errors = reactive({ name: '' })
+const f = reactive({ name: '', slug: '', description: '' })
+const dirty = reactive({ name: false, slug: false })
+const errors = reactive({ name: '', slug: '' })
+// Tracks whether the user has hand-edited the slug, so we stop auto-deriving it.
+const slugTouched = ref(false)
 
 const createMut = useCreateOrganization()
+
+const RESERVED_SLUGS = new Set(['admin', 'auth', 'auth-admin', 'traefik', 'api', 'app', 'www'])
+
+function slugify(s: string) {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+}
 
 function validateName() {
   return f.name.trim() ? '' : 'Organization name is required'
 }
-// Validate on every keystroke only after the field has been blurred once.
+function validateSlug() {
+  const s = f.slug
+  if (!/^[a-z0-9-]{2,40}$/.test(s)) return '2–40 chars: lowercase letters, digits, hyphens'
+  if (s.startsWith('-') || s.endsWith('-')) return 'No leading or trailing hyphen'
+  if (RESERVED_SLUGS.has(s)) return 'This slug is reserved'
+  return ''
+}
+
+// Validate on every keystroke only after a field has been blurred once.
 watch(
   () => f.name,
-  () => {
+  (v) => {
     if (dirty.name) errors.name = validateName()
+    if (!slugTouched.value) {
+      f.slug = slugify(v)
+      if (dirty.slug) errors.slug = validateSlug()
+    }
+  },
+)
+watch(
+  () => f.slug,
+  () => {
+    if (dirty.slug) errors.slug = validateSlug()
   },
 )
 function markNameDirty() {
   dirty.name = true
   errors.name = validateName()
+}
+function onSlugInput() {
+  slugTouched.value = true
+}
+function markSlugDirty() {
+  dirty.slug = true
+  errors.slug = validateSlug()
 }
 
 // Open via the button or a ?create=1 deep link (command palette etc.).
@@ -93,17 +131,26 @@ watch(
 watch(creating, (open) => {
   if (open) {
     f.name = ''
+    f.slug = ''
     f.description = ''
     dirty.name = false
+    dirty.slug = false
     errors.name = ''
+    errors.slug = ''
+    slugTouched.value = false
   }
 })
 
 async function submit() {
   markNameDirty()
-  if (errors.name) return
+  markSlugDirty()
+  if (errors.name || errors.slug) return
   try {
-    const org = await createMut.mutateAsync({ name: f.name.trim(), description: f.description.trim() })
+    const org = await createMut.mutateAsync({
+      name: f.name.trim(),
+      slug: f.slug,
+      description: f.description.trim(),
+    })
     creating.value = false
     toast({
       title: 'Organization created',
@@ -194,7 +241,7 @@ async function submit() {
                   <Avatar :name="o.name" size="sm" square />
                   <div class="idcell__main">
                     <div class="idcell__name">{{ o.name }}</div>
-                    <div class="idcell__sub mono">{{ o.id }}</div>
+                    <div class="idcell__sub mono">{{ o.slug }}</div>
                   </div>
                 </div>
               </td>
@@ -276,6 +323,7 @@ async function submit() {
           <div style="font-weight: 600; margin-bottom: 12px; font-size: 13.5px">Details</div>
           <dl class="dl">
             <dt>Name</dt><dd>{{ selected.name }}</dd>
+            <dt>Slug</dt><dd class="mono">{{ selected.slug }}</dd>
             <dt>Description</dt><dd>{{ selected.description || '—' }}</dd>
             <dt>Organization ID</dt><dd class="mono">{{ selected.id }}</dd>
             <dt>Logto ID</dt><dd class="mono">{{ selected.external_id || '— (not yet provisioned)' }}</dd>
@@ -311,7 +359,16 @@ async function submit() {
             :error="errors.name"
             autofocus
             @blur="markNameDirty"
-            @keyup.enter="submit"
+          />
+        </Field>
+        <Field label="URL slug" required :error="errors.slug" hint="Tenant subdomain — auto-filled from the name, editable.">
+          <Input
+            icon="globe"
+            placeholder="acme"
+            :model-value="f.slug"
+            :error="errors.slug"
+            @update:model-value="f.slug = String($event); onSlugInput()"
+            @blur="markSlugDirty"
           />
         </Field>
         <Field label="Description" hint="Optional — a short note about this organization.">

@@ -31,6 +31,10 @@ export function useApi() {
     const token = await getAccessToken(config.logtoApiResource)
     const res = await fetch(`${config.apiBaseUrl}${path}`, {
       ...init,
+      // Never serve authenticated API data from the browser HTTP cache — the
+      // gateway sends Cache-Control: public, max-age, which would otherwise make
+      // post-mutation refetches return stale lists.
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,

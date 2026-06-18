@@ -8,6 +8,7 @@ export interface Organization {
   id: string
   external_id: string | null
   synced: boolean
+  slug: string
   name: string
   description: string
   created_at: string
@@ -29,6 +30,7 @@ export interface OrgListResponse {
 
 export interface CreateOrgInput {
   name: string
+  slug: string
   description: string
 }
 
