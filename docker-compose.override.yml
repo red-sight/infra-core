@@ -103,3 +103,20 @@ services:
     depends_on:
       logto-init:
         condition: service_completed_successfully
+
+  tenant-web:
+    build:
+      target: dev
+      args:
+        UID: "${CURRENT_UID:-1000}"
+        GID: "${CURRENT_GID:-1000}"
+    volumes:
+      - ./tenant-web:/app
+      - /app/node_modules
+    ports:
+      - "5174:5174"
+    labels:
+      traefik.http.services.tenant.loadbalancer.server.port: "5174"
+    depends_on:
+      logto-init:
+        condition: service_completed_successfully

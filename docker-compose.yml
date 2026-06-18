@@ -151,6 +151,11 @@ services:
       DATABASE_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_CORE_DB:-service_core}
       PORT: "8080"
       INFRA_SERVICE_CORE_M2M_FILE: /run/infra/service-core-m2m.json
+      INFRA_TENANT_APP_FILE: /run/infra/tenant-app.json
+      # Used to derive each tenant's frontend origin (<proto>://<slug>.<base>) for
+      # OIDC redirect-URI registration.
+      INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
+      INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       OUTBOX_POLL_INTERVAL: ${INFRA_CORE_OUTBOX_POLL_INTERVAL:-2s}
       OUTBOX_MAX_ATTEMPTS: ${INFRA_CORE_OUTBOX_MAX_ATTEMPTS:-10}
     healthcheck:
@@ -270,3 +275,26 @@ services:
       traefik.http.routers.admin.rule: "Host(`${INFRA_ADMIN_SUBDOMAIN:-admin}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
       traefik.http.routers.admin.entrypoints: "web"
       traefik.http.services.admin.loadbalancer.server.port: "80"
+
+  # Shared multi-tenant frontend: one app serves every organization, selected by
+  # subdomain (<slug>.<base>). The redirect URI for each tenant origin is registered
+  # in the shared Logto Tenant app by service-core's outbox on org creation.
+  tenant-web:
+    build:
+      context: ./tenant-web
+      target: prod
+    restart: unless-stopped
+    networks:
+      - infra
+    volumes:
+      - infra_init_data:/run/infra:ro
+    environment:
+      VITE_API_BASE_URL: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_BASE_DOMAIN:-app.localhost}/${INFRA_API_ROUTE:-api}
+    labels:
+      traefik.enable: "true"
+      # Wildcard subdomain catch-all; lower priority than the exact Host() routers
+      # above (admin/auth/auth-admin/traefik) so those win for their own hosts.
+      traefik.http.routers.tenant.rule: "HostRegexp(`^[a-z0-9-]+\\.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}$`)"
+      traefik.http.routers.tenant.entrypoints: "web"
+      traefik.http.routers.tenant.priority: "1"
+      traefik.http.services.tenant.loadbalancer.server.port: "80"

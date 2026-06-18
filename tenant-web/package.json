@@ -1,0 +1,20 @@
+{
+  "name": "infra-tenant-web",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@logto/vue": "^2.2.0",
+    "vue": "^3.4.29"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.5",
+    "@vitejs/plugin-vue": "^5.0.5",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
+  }
+}
