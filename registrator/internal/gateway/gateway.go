@@ -25,6 +25,10 @@ type Config struct {
 	APIRoute        string
 	LogtoResourceID string
 	ConfigPath      string // path to krakend.json
+
+	// CORSAllowOrigins are the browser origins allowed to call the gateway (the
+	// admin SPA lives on a different subdomain than the API). Empty disables CORS.
+	CORSAllowOrigins []string
 }
 
 // ServiceInfo identifies a registered service and where to find its spec.
@@ -316,6 +320,25 @@ func (g *Generator) marshalConfig(endpoints []interface{}) ([]byte, error) {
 		endpoints = []interface{}{}
 	}
 	config["endpoints"] = endpoints
+
+	// Inject CORS into the service-level extra_config so the admin SPA (a
+	// different origin than the API) can call the gateway from the browser.
+	// KrakenD's security/cors handles the preflight (OPTIONS) automatically.
+	if len(g.cfg.CORSAllowOrigins) > 0 {
+		extra, ok := config["extra_config"].(map[string]interface{})
+		if !ok {
+			extra = map[string]interface{}{}
+			config["extra_config"] = extra
+		}
+		extra["security/cors"] = map[string]interface{}{
+			"allow_origins":     g.cfg.CORSAllowOrigins,
+			"allow_methods":     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+			"allow_headers":     []string{"Origin", "Authorization", "Content-Type"},
+			"expose_headers":    []string{"Content-Length"},
+			"allow_credentials": false,
+			"max_age":           "12h",
+		}
+	}
 
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

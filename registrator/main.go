@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +21,28 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// corsAllowOrigins returns the browser origins allowed to call the gateway.
+// Defaults to the admin SPA origin (derived from the admin subdomain + base
+// domain); override with INFRA_CORS_ALLOW_ORIGINS (comma-separated) to add others
+// (e.g. a local Vite dev server).
+func corsAllowOrigins() []string {
+	if override := env("INFRA_CORS_ALLOW_ORIGINS", ""); override != "" {
+		var origins []string
+		for _, o := range strings.Split(override, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		return origins
+	}
+	adminOrigin := fmt.Sprintf("%s://%s.%s",
+		env("INFRA_HTTP_PROTOCOL", "http"),
+		env("INFRA_ADMIN_SUBDOMAIN", "admin"),
+		env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
+	)
+	return []string{adminOrigin}
 }
 
 func main() {
@@ -61,12 +85,13 @@ func main() {
 	})
 
 	gen := gateway.New(gateway.Config{
-		HTTPProtocol:    env("INFRA_HTTP_PROTOCOL", "http"),
-		BaseDomain:      env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
-		OIDCSubdomain:   env("INFRA_HTTP_OIDC_SUBDOMAIN", "auth"),
-		APIRoute:        env("INFRA_API_ROUTE", "api"),
-		LogtoResourceID: env("INFRA_LOGTO_API_RESOURCE_ID", ""),
-		ConfigPath:      env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
+		HTTPProtocol:     env("INFRA_HTTP_PROTOCOL", "http"),
+		BaseDomain:       env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
+		OIDCSubdomain:    env("INFRA_HTTP_OIDC_SUBDOMAIN", "auth"),
+		APIRoute:         env("INFRA_API_ROUTE", "api"),
+		LogtoResourceID:  env("INFRA_LOGTO_API_RESOURCE_ID", ""),
+		ConfigPath:       env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
+		CORSAllowOrigins: corsAllowOrigins(),
 	})
 
 	// Validate every generated config with `krakend check` before it is promoted,

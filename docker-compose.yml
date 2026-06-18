@@ -233,8 +233,12 @@ services:
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_HTTP_OIDC_SUBDOMAIN: ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}
+      INFRA_ADMIN_SUBDOMAIN: ${INFRA_ADMIN_SUBDOMAIN:-admin}
       INFRA_API_ROUTE: ${INFRA_API_ROUTE:-api}
       INFRA_LOGTO_API_RESOURCE_ID: ${INFRA_LOGTO_API_RESOURCE_ID}
+      # Optional: comma-separated extra browser origins allowed to call the gateway
+      # (defaults to the admin SPA origin derived above). E.g. a local Vite dev server.
+      INFRA_CORS_ALLOW_ORIGINS: ${INFRA_CORS_ALLOW_ORIGINS:-}
       INFRA_LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_REGISTRATOR_RELOAD_DELAY: ${INFRA_REGISTRATOR_RELOAD_DELAY:-5s}
     healthcheck:
