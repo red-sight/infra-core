@@ -315,8 +315,11 @@ Current endpoints:
 |---|---|---|
 | `GET` | `/admin/organizations` | `read:organizations` |
 | `POST` | `/admin/organizations` | `write:organizations` |
+| `GET` | `/tenant/by-slug/{slug}` | public (no auth) |
 
-Logto scopes declared: `read:organizations`, `write:organizations`, `delete:organizations` — assigned to the `admin` role.
+Logto scopes declared: `read:organizations`, `write:organizations`, `delete:organizations` — assigned to the `admin` role. `GET /tenant/by-slug/{slug}` is public: the tenant frontend calls it (before login) to resolve its organization from the subdomain.
+
+Each organization has a DNS-safe `slug` (validated, reserved-word-checked) that addresses its tenant frontend at `<slug>.<base-domain>`. On create, the outbox worker also appends `<slug>`'s callback URL to the shared Logto `Tenant` app so that subdomain can authenticate.
 
 **Organizations: core is the source of truth, Logto is a follower.** `POST /admin/organizations` writes the organization row and a `outbox_events` row in one DB transaction, then returns `201` with `synced: false`. A background outbox worker provisions the organization in Logto (via a dedicated Management M2M app), fills the provider-neutral `external_id`, and the organization reports `synced: true`. Delivery retries with backoff and is idempotent — there is no periodic reconciliation. service-core reads its M2M creds from `/run/infra/service-core-m2m.json` (`INFRA_SERVICE_CORE_M2M_FILE`); outbox tuning via `OUTBOX_POLL_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`.
 

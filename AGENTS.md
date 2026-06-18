@@ -60,11 +60,15 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 
 **All initial Logto config via `scripts/logto/init.js`.** Never configure Logto manually via the admin UI for anything declared in `logto.config.yaml` — `logto-init` runs on every `compose up` and will overwrite manual changes. Runtime changes to things not covered by the config file may use the Management API directly.
 
-**`infra_init_data` volume.** Shared between `logto-init`, `registrator` and `service-core`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json` (read by the Registrator) and `/run/infra/service-core-m2m.json` (read by service-core). In Swarm all three are pinned to the same node so the volume is local; moving the creds to Docker secrets would remove that pin.
+**`infra_init_data` volume.** Shared between `logto-init`, `registrator`, `service-core`, `admin` and `tenant-web`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json` (read by the Registrator) and `/run/infra/service-core-m2m.json` (read by service-core), and per-app SPA configs `admin-app.json` / `tenant-app.json` (appId/endpoint/apiResource — read by the respective frontends, and `tenant-app.json` also by service-core to append per-org redirect URIs). In Swarm the M2M readers are pinned to the same node so the volume is local; moving the creds to Docker secrets would remove that pin.
 
 **`service-core` is the source of truth for organizations; Logto is a follower.** The goal is to manage everything through our own APIs (eventually retiring the Logto console). An organization is created in our Postgres first (authoritative), then provisioned in Logto. Logto still holds the org because membership and the `organization_id` JWT claim depend on it — but core owns it. service-core has a dedicated Logto Management M2M app (`Service Core`, created in `init.js` alongside `m-default`, with the same management access) so its credentials rotate/revoke independently. The provider-neutral link column is `external_id` (not `logto_org_id`) — Logto specifics live behind `internal/logto`, so swapping providers changes only that package, not the schema.
 
 **Core→Logto sync uses a transactional outbox, never periodic reconciliation.** `POST /admin/organizations` writes the org row and an `outbox_events` row in one DB transaction (core is always consistent). A background worker in service-core (`internal/outbox`) delivers pending events to Logto with retries and exponential backoff, idempotently (reconciles by the `coreOrgId` stamped on the Logto org's `customData`), filling `external_id` on success. "Synced" is derived from `external_id IS NOT NULL`; there is no status column on the org. Failed deliveries are visible as `outbox_events.status = 'failed'`. This eliminates drift by design — no diff-and-fix job.
+
+**Tenant frontends: one shared SPA, subdomain per organization.** Each organization is reached at `<slug>.<base-domain>` (e.g. `acme.app.localhost`), served by a single multi-tenant frontend (`tenant-web`) — not an app per org. Traefik routes the wildcard `HostRegexp(^[a-z0-9-]+\.<base>$)` to it at a lower priority than the exact-host routers (admin/auth/…), and the org `slug` (DNS-safe, validated, reserved-word-checked) is the subdomain label. Before login, `tenant-web` resolves its org via the public `GET /tenant/by-slug/{slug}` (unauthenticated, `x-infra-protected: false`), then signs in and requests an organization-scoped token.
+
+**One shared Logto `Tenant` SPA application; per-org redirect URIs appended at runtime.** Logto has no wildcard redirect URIs, so on org creation service-core's outbox appends `<proto>://<slug>.<base>/callback` to the shared `Tenant` app (declared in `logto.config.yaml`; its appId is written to `/run/infra/tenant-app.json`, consumed by both `tenant-web` and service-core). Idempotent. **Caveat:** the GET-modify-PATCH of the shared app races under concurrent org creation across replicas — fine single-replica; at scale serialize web-provisioning or move to an app-per-org. Gateway CORS allows the wildcard tenant origin `<proto>://*.<base>` (`allow_credentials: false`, so breadth grants no access — the JWT is still validated).
 
 **Data ownership boundary — the rule for any future identity entity (users, roles, membership).**
 - **Logto owns authentication & authorization**: credentials, login, sessions/MFA, membership-for-auth, org roles/scopes that mint JWT claims. Never duplicate authority for these.
@@ -92,6 +96,8 @@ When suggesting image updates, pin to a specific version. `latest` is acceptable
 | `http://app.localhost` | frontend (user-configured) | — |
 | `http://app.localhost/api` | KrakenD | 8080 |
 | `http://app.localhost/docs` | Swagger UI | 8080 |
+| `http://admin.app.localhost` | admin console (SPA) | 80/5173 |
+| `http://<slug>.app.localhost` | tenant-web (per-org frontend, wildcard) | 80/5174 |
 | `http://auth.app.localhost` | Logto OIDC | 3001 |
 | `http://auth-admin.app.localhost` | Logto admin console | 3002 |
 | `http://traefik.app.localhost` | Traefik dashboard (dev only) | — |
