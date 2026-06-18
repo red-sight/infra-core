@@ -2,7 +2,10 @@ package organization
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -17,6 +20,7 @@ import (
 type Organization struct {
 	ID          string    `gorm:"primaryKey;type:uuid" json:"id"`
 	ExternalID  *string   `gorm:"uniqueIndex"           json:"external_id"`
+	Slug        string    `gorm:"uniqueIndex;not null"  json:"slug"`
 	Name        string    `gorm:"not null"              json:"name"`
 	Description string    `gorm:"not null;default:''"   json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -27,6 +31,7 @@ type OrgResponse struct {
 	ID          string    `json:"id"          doc:"Internal organization ID"`
 	ExternalID  *string   `json:"external_id" doc:"Identity-provider organization ID (Logto). Null until synced."`
 	Synced      bool      `json:"synced"      doc:"Whether the organization has been provisioned in the identity provider."`
+	Slug        string    `json:"slug"        doc:"DNS-safe label addressing the tenant frontend subdomain"`
 	Name        string    `json:"name"        doc:"Organization name"`
 	Description string    `json:"description" doc:"Organization description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -38,11 +43,36 @@ func toResponse(o Organization) OrgResponse {
 		ID:          o.ID,
 		ExternalID:  o.ExternalID,
 		Synced:      o.ExternalID != nil && *o.ExternalID != "",
+		Slug:        o.Slug,
 		Name:        o.Name,
 		Description: o.Description,
 		CreatedAt:   o.CreatedAt,
 		UpdatedAt:   o.UpdatedAt,
 	}
+}
+
+// slugPattern mirrors the create-input validation; DNS-label-safe, 2–40 chars.
+var slugPattern = regexp.MustCompile(`^[a-z0-9-]{2,40}$`)
+
+// reservedSlugs are subdomains used by platform services — they must never be
+// claimable as a tenant slug or routing would collide.
+var reservedSlugs = map[string]bool{
+	"admin": true, "auth": true, "auth-admin": true, "traefik": true,
+	"api": true, "app": true, "www": true,
+}
+
+// validateSlug enforces format, no leading/trailing hyphen, and the reserved list.
+func validateSlug(slug string) error {
+	if !slugPattern.MatchString(slug) {
+		return errors.New("slug must be 2–40 chars of lowercase letters, digits or hyphens")
+	}
+	if slug[0] == '-' || slug[len(slug)-1] == '-' {
+		return errors.New("slug must not start or end with a hyphen")
+	}
+	if reservedSlugs[slug] {
+		return errors.New("slug is reserved")
+	}
+	return nil
 }
 
 func RegisterRoutes(api huma.API, db *gorm.DB) {
@@ -74,6 +104,18 @@ func RegisterRoutes(api huma.API, db *gorm.DB) {
 			"x-infra-scopes":    []string{"write:organizations"},
 		},
 	}, h.create)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-tenant-by-slug",
+		Method:      http.MethodGet,
+		Path:        "/tenant/by-slug/{slug}",
+		Summary:     "Resolve tenant by slug",
+		Description: "Public endpoint the tenant frontend calls (before login) to resolve its organization from the subdomain.",
+		Tags:        []string{"Tenant"},
+		Extensions: map[string]any{
+			"x-infra-protected": false,
+		},
+	}, h.getBySlug)
 }
 
 type handler struct{ db *gorm.DB }
@@ -134,8 +176,9 @@ func (h *handler) list(_ context.Context, input *listInput) (*listOutput, error)
 
 type createInput struct {
 	Body struct {
-		Name        string `json:"name"        minLength:"1" maxLength:"100" doc:"Organization name"`
-		Description string `json:"description" maxLength:"500"               doc:"Organization description"`
+		Name        string `json:"name"                  minLength:"1" maxLength:"100"   doc:"Organization name"`
+		Slug        string `json:"slug"                  pattern:"^[a-z0-9-]{2,40}$"     doc:"DNS-safe subdomain label (e.g. acme)"`
+		Description string `json:"description,omitempty" maxLength:"500"                 doc:"Organization description (optional)"`
 	}
 }
 
@@ -148,8 +191,13 @@ type createOutput struct {
 // worker provisions the organization in the identity provider afterwards, so the
 // response carries synced=false until that delivery completes.
 func (h *handler) create(ctx context.Context, input *createInput) (*createOutput, error) {
+	if err := validateSlug(input.Body.Slug); err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
+
 	org := Organization{
 		ID:          uuid.NewString(),
+		Slug:        input.Body.Slug,
 		Name:        input.Body.Name,
 		Description: input.Body.Description,
 	}
@@ -164,10 +212,44 @@ func (h *handler) create(ctx context.Context, input *createInput) (*createOutput
 		})
 	})
 	if err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, huma.Error409Conflict("slug already taken")
+		}
 		return nil, huma.Error500InternalServerError("failed to create organization")
 	}
 
 	out := &createOutput{Body: toResponse(org)}
+	return out, nil
+}
+
+type getBySlugInput struct {
+	Slug string `path:"slug" doc:"Tenant slug"`
+}
+
+type tenantOutput struct {
+	Body struct {
+		ID   string `json:"id"   doc:"Internal organization ID"`
+		Slug string `json:"slug" doc:"Tenant slug"`
+		Name string `json:"name" doc:"Organization name"`
+	}
+}
+
+// getBySlug resolves an organization from its subdomain slug. Public (no auth):
+// the tenant frontend calls it before login to learn which organization it is.
+func (h *handler) getBySlug(ctx context.Context, input *getBySlugInput) (*tenantOutput, error) {
+	var org Organization
+	err := h.db.WithContext(ctx).First(&org, "slug = ?", input.Slug).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, huma.Error404NotFound("organization not found")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("failed to resolve organization")
+	}
+
+	out := &tenantOutput{}
+	out.Body.ID = org.ID
+	out.Body.Slug = org.Slug
+	out.Body.Name = org.Name
 	return out, nil
 }
 
@@ -189,45 +271,66 @@ type OrgProvisioner interface {
 	// Create provisions the organization in the identity provider, stamping the
 	// core ID on its custom data, and returns the external ID.
 	Create(ctx context.Context, name, description, coreID string) (externalID string, err error)
+	// EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs
+	// for the given origin on the shared Tenant application. Idempotent.
+	EnsureTenantRedirectURI(ctx context.Context, origin string) error
+}
+
+// HandlerConfig carries the deployment URL shape needed to derive a tenant's
+// frontend origin (<protocol>://<slug>.<baseDomain>).
+type HandlerConfig struct {
+	HTTPProtocol string
+	BaseDomain   string
 }
 
 // NewOutboxHandler returns an outbox.Handler that provisions organizations in the
 // identity provider. It runs inside the worker's per-event transaction, so the
 // external_id write and the event's completion commit atomically.
-func NewOutboxHandler(p OrgProvisioner) outbox.Handler {
+func NewOutboxHandler(p OrgProvisioner, cfg HandlerConfig) outbox.Handler {
 	return func(ctx context.Context, tx *gorm.DB, ev outbox.Event) error {
 		switch ev.EventType {
 		case EventOrgCreated:
-			return provisionOrg(ctx, tx, p, ev)
+			return provisionOrg(ctx, tx, p, cfg, ev)
 		default:
 			return huma.Error500InternalServerError("unknown outbox event type: " + ev.EventType)
 		}
 	}
 }
 
-func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, ev outbox.Event) error {
+func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg HandlerConfig, ev outbox.Event) error {
 	var org Organization
 	if err := tx.First(&org, "id = ?", ev.AggregateID).Error; err != nil {
 		return err
 	}
-	if org.ExternalID != nil && *org.ExternalID != "" {
-		return nil // already provisioned — nothing to do
-	}
 
-	// Only the first attempt can safely skip the lookup: any retry may follow a
-	// prior attempt that created the org in the provider but failed to commit
-	// locally, so reconcile by core ID before creating a duplicate.
-	if ev.Attempts > 0 {
-		if extID, found, err := p.FindByCoreID(ctx, org.ID); err != nil {
+	// Step 1: ensure the organization exists in the identity provider (external_id).
+	if org.ExternalID == nil || *org.ExternalID == "" {
+		var extID string
+		// Only retries can safely look up: a prior attempt may have created the org
+		// but failed to commit locally — reconcile by core ID before duplicating.
+		if ev.Attempts > 0 {
+			id, found, err := p.FindByCoreID(ctx, org.ID)
+			if err != nil {
+				return err
+			}
+			if found {
+				extID = id
+			}
+		}
+		if extID == "" {
+			id, err := p.Create(ctx, org.Name, org.Description, org.ID)
+			if err != nil {
+				return err
+			}
+			extID = id
+		}
+		if err := tx.Model(&org).Update("external_id", extID).Error; err != nil {
 			return err
-		} else if found {
-			return tx.Model(&org).Update("external_id", extID).Error
 		}
 	}
 
-	extID, err := p.Create(ctx, org.Name, org.Description, org.ID)
-	if err != nil {
-		return err
-	}
-	return tx.Model(&org).Update("external_id", extID).Error
+	// Step 2: ensure the tenant frontend's redirect URI is registered. Idempotent,
+	// re-run on every retry until it succeeds.
+	origin := fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, org.Slug, cfg.BaseDomain)
+	return p.EnsureTenantRedirectURI(ctx, origin)
 }

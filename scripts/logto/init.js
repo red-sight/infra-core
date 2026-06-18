@@ -312,6 +312,18 @@ async function main() {
     console.log(`Admin app config written (appId: ${adminAppId}).`);
   }
 
+  // Shared Tenant SPA app config — consumed by tenant-web (its appId) and by
+  // service-core (to append per-org redirect URIs via the Management API).
+  const tenantAppId = appIds['Tenant'];
+  if (tenantAppId) {
+    fs.writeFileSync('/run/infra/tenant-app.json', JSON.stringify({
+      appId: tenantAppId,
+      endpoint: LOGTO_ENDPOINT,
+      apiResource: API_RESOURCE_INDICATOR,
+    }));
+    console.log(`Tenant app config written (appId: ${tenantAppId}).`);
+  }
+
   // --- Admin user (default tenant — app users) ---
   const { data: defaultUsers } = await api(LOGTO_ENDPOINT, defaultToken, 'GET', '/users?page_size=50');
   const existingDefaultUser = Array.isArray(defaultUsers) && defaultUsers.find(u => u.username === ADMIN_USERNAME);

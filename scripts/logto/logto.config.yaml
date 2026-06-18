@@ -64,6 +64,16 @@ applications:
       - "${INFRA_HTTP_PROTOCOL}://${INFRA_ADMIN_SUBDOMAIN}.${INFRA_HTTP_BASE_DOMAIN}"
       - "http://localhost:5173"
 
+  # Shared OIDC client for all tenant frontends. Per-organization redirect URIs
+  # (<proto>://<slug>.<base>/callback) are appended at runtime by service-core's
+  # outbox worker when an organization is created — they are not declared here.
+  - name: Tenant
+    type: SPA
+    redirectUris:
+      - "http://localhost:5174/callback"
+    postLogoutRedirectUris:
+      - "http://localhost:5174"
+
 jwt:
   access_token:
     include_roles: true

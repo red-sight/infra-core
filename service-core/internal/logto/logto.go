@@ -32,21 +32,25 @@ type credentials struct {
 
 // Client talks to the Logto Management API using M2M client-credentials.
 type Client struct {
-	credsPath string
+	credsPath     string
+	tenantAppPath string
 
-	mu       sync.Mutex
-	token    string
-	tokenExp time.Time
-	creds    *credentials
-	http     *http.Client
+	mu          sync.Mutex
+	token       string
+	tokenExp    time.Time
+	creds       *credentials
+	tenantAppID string
+	http        *http.Client
 }
 
-// New returns a client that reads its M2M credentials from credsPath on first
-// use (the file is written by logto-init, which may not be ready at startup).
-func New(credsPath string) *Client {
+// New returns a client that reads its M2M credentials from credsPath and the
+// shared Tenant application id from tenantAppPath on first use (both written by
+// logto-init, which may not be ready at startup).
+func New(credsPath, tenantAppPath string) *Client {
 	return &Client{
-		credsPath: credsPath,
-		http:      &http.Client{Timeout: httpTimeout},
+		credsPath:     credsPath,
+		tenantAppPath: tenantAppPath,
+		http:          &http.Client{Timeout: httpTimeout},
 	}
 }
 
@@ -94,6 +98,96 @@ func (c *Client) FindByCoreID(ctx context.Context, coreID string) (string, bool,
 		}
 		page++
 	}
+}
+
+// EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs for
+// the given origin on the shared Tenant application. Idempotent: it appends
+// "<origin>/callback" to redirectUris and "<origin>" to postLogoutRedirectUris
+// only if missing, preserving any other oidcClientMetadata fields.
+func (c *Client) EnsureTenantRedirectURI(ctx context.Context, origin string) error {
+	appID, err := c.loadTenantAppID()
+	if err != nil {
+		return err
+	}
+
+	var app struct {
+		OidcClientMetadata map[string]any `json:"oidcClientMetadata"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/applications/"+appID, nil, &app); err != nil {
+		return err
+	}
+
+	meta := app.OidcClientMetadata
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	redirects := toStringSlice(meta["redirectUris"])
+	postLogouts := toStringSlice(meta["postLogoutRedirectUris"])
+
+	callback := origin + "/callback"
+	changed := false
+	if !contains(redirects, callback) {
+		redirects = append(redirects, callback)
+		changed = true
+	}
+	if !contains(postLogouts, origin) {
+		postLogouts = append(postLogouts, origin)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+
+	meta["redirectUris"] = redirects
+	meta["postLogoutRedirectUris"] = postLogouts
+	body := map[string]any{"oidcClientMetadata": meta}
+	return c.do(ctx, http.MethodPatch, "/api/applications/"+appID, body, nil)
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func toStringSlice(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (c *Client) loadTenantAppID() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tenantAppID != "" {
+		return c.tenantAppID, nil
+	}
+	data, err := os.ReadFile(c.tenantAppPath)
+	if err != nil {
+		return "", fmt.Errorf("logto: tenant app config not ready (%w)", err)
+	}
+	var t struct {
+		AppID string `json:"appId"`
+	}
+	if err := json.Unmarshal(data, &t); err != nil {
+		return "", fmt.Errorf("logto: invalid tenant app config: %w", err)
+	}
+	if t.AppID == "" {
+		return "", fmt.Errorf("logto: tenant app id empty in %s", c.tenantAppPath)
+	}
+	c.tenantAppID = t.AppID
+	return t.AppID, nil
 }
 
 func (c *Client) loadCreds() error {

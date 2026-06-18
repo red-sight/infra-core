@@ -50,8 +50,15 @@ func main() {
 	// Outbox worker: provisions organizations in Logto downstream of the local
 	// write. The Logto client reads M2M creds lazily (logto-init may not have
 	// written them yet at startup).
-	logtoClient := logto.New(env("INFRA_SERVICE_CORE_M2M_FILE", "/run/infra/service-core-m2m.json"))
-	worker := outbox.NewWorker(db, organization.NewOutboxHandler(logtoClient), outbox.Config{
+	logtoClient := logto.New(
+		env("INFRA_SERVICE_CORE_M2M_FILE", "/run/infra/service-core-m2m.json"),
+		env("INFRA_TENANT_APP_FILE", "/run/infra/tenant-app.json"),
+	)
+	handler := organization.NewOutboxHandler(logtoClient, organization.HandlerConfig{
+		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
+		BaseDomain:   env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
+	})
+	worker := outbox.NewWorker(db, handler, outbox.Config{
 		PollInterval: envDuration("OUTBOX_POLL_INTERVAL", 2*time.Second),
 		MaxAttempts:  envInt("OUTBOX_MAX_ATTEMPTS", 10),
 	})
@@ -109,7 +116,9 @@ func mustMigrate(dsn string) {
 }
 
 func mustDB(dsn string) *gorm.DB {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// TranslateError maps driver errors to gorm sentinels (e.g. ErrDuplicatedKey)
+	// so handlers can map a unique-violation to 409 without driver-specific checks.
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		log.Fatalf("db connect: %v", err)
 	}
