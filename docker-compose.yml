@@ -143,9 +143,16 @@ services:
     restart: unless-stopped
     networks:
       - infra
+    volumes:
+      # M2M creds written by logto-init; service-core reads them to provision
+      # organizations in Logto (the outbox worker's downstream target).
+      - infra_init_data:/run/infra:ro
     environment:
       DATABASE_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_CORE_DB:-service_core}
       PORT: "8080"
+      INFRA_SERVICE_CORE_M2M_FILE: /run/infra/service-core-m2m.json
+      OUTBOX_POLL_INTERVAL: ${INFRA_CORE_OUTBOX_POLL_INTERVAL:-2s}
+      OUTBOX_MAX_ATTEMPTS: ${INFRA_CORE_OUTBOX_MAX_ATTEMPTS:-10}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 10s

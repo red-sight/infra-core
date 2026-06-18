@@ -60,7 +60,17 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 
 **All initial Logto config via `scripts/logto/init.js`.** Never configure Logto manually via the admin UI for anything declared in `logto.config.yaml` — `logto-init` runs on every `compose up` and will overwrite manual changes. Runtime changes to things not covered by the config file may use the Management API directly.
 
-**`infra_init_data` volume.** Shared between `logto-init` and `registrator`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json`; the Registrator reads them on startup.
+**`infra_init_data` volume.** Shared between `logto-init`, `registrator` and `service-core`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json` (read by the Registrator) and `/run/infra/service-core-m2m.json` (read by service-core). In Swarm all three are pinned to the same node so the volume is local; moving the creds to Docker secrets would remove that pin.
+
+**`service-core` is the source of truth for organizations; Logto is a follower.** The goal is to manage everything through our own APIs (eventually retiring the Logto console). An organization is created in our Postgres first (authoritative), then provisioned in Logto. Logto still holds the org because membership and the `organization_id` JWT claim depend on it — but core owns it. service-core has a dedicated Logto Management M2M app (`Service Core`, created in `init.js` alongside `m-default`, with the same management access) so its credentials rotate/revoke independently. The provider-neutral link column is `external_id` (not `logto_org_id`) — Logto specifics live behind `internal/logto`, so swapping providers changes only that package, not the schema.
+
+**Core→Logto sync uses a transactional outbox, never periodic reconciliation.** `POST /admin/organizations` writes the org row and an `outbox_events` row in one DB transaction (core is always consistent). A background worker in service-core (`internal/outbox`) delivers pending events to Logto with retries and exponential backoff, idempotently (reconciles by the `coreOrgId` stamped on the Logto org's `customData`), filling `external_id` on success. "Synced" is derived from `external_id IS NOT NULL`; there is no status column on the org. Failed deliveries are visible as `outbox_events.status = 'failed'`. This eliminates drift by design — no diff-and-fix job.
+
+**Data ownership boundary — the rule for any future identity entity (users, roles, membership).**
+- **Logto owns authentication & authorization**: credentials, login, sessions/MFA, membership-for-auth, org roles/scopes that mint JWT claims. Never duplicate authority for these.
+- **Core DB owns domain data & relationships.** For an identity entity we must query/join/reference by FK, keep a *minimal projection* (`external_id` + a few denormalized fields), not a full copy.
+- **One sync direction per concern** — never bidirectional on the same field (avoids split-brain). Domain-owned creation (org) is core→Logto via the outbox; auth facts we only consume (effective roles in the JWT) are read from the token, not stored as authority.
+- **Add a projection only when a concrete need appears** (an FK, a rich query, a domain field), not preemptively. Consequence: users are **not** mirrored yet — nothing in core references a user beyond the propagated `x-user-id`.
 
 ## Service images (pinned)
 

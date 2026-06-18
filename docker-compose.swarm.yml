@@ -15,9 +15,10 @@
 #     persisted volume, and set `traefik.http.routers.*.tls.certresolver=le` /
 #     entrypoints=websecure on the routers. Needs a real domain + reachable host.
 #   * Docker secrets: move INFRA_PG_PASSWORD / INFRA_LOGTO_ADMIN_PASSWORD to
-#     `secrets:` with the `*_FILE` env convention. The registrator M2M file stays
-#     on the infra_init_data volume (it is generated at runtime by logto-init),
-#     which is why logto-init and registrator are pinned to the same node below.
+#     `secrets:` with the `*_FILE` env convention. The registrator and
+#     service-core M2M files stay on the infra_init_data volume (generated at
+#     runtime by logto-init), which is why logto-init, registrator and
+#     service-core are pinned to the same node below.
 #
 # Resource limits are conservative starting points — tune to your node sizes.
 
@@ -140,6 +141,12 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+      # Reads the service-core M2M creds from infra_init_data (written by
+      # logto-init), so it must run on the same node. See the secrets note in the
+      # header — moving these creds to a Docker secret would remove this pin.
+      placement:
+        constraints:
+          - node.role == manager
       resources:
         limits:
           memory: 256M

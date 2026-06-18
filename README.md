@@ -314,8 +314,11 @@ Current endpoints:
 | Method | Path | Required scope |
 |---|---|---|
 | `GET` | `/admin/organizations` | `read:organizations` |
+| `POST` | `/admin/organizations` | `write:organizations` |
 
 Logto scopes declared: `read:organizations`, `write:organizations`, `delete:organizations` — assigned to the `admin` role.
+
+**Organizations: core is the source of truth, Logto is a follower.** `POST /admin/organizations` writes the organization row and a `outbox_events` row in one DB transaction, then returns `201` with `synced: false`. A background outbox worker provisions the organization in Logto (via a dedicated Management M2M app), fills the provider-neutral `external_id`, and the organization reports `synced: true`. Delivery retries with backoff and is idempotent — there is no periodic reconciliation. service-core reads its M2M creds from `/run/infra/service-core-m2m.json` (`INFRA_SERVICE_CORE_M2M_FILE`); outbox tuning via `OUTBOX_POLL_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`.
 
 Uses the shared `infra/query` module (`github.com/red-sight/infra-core/query`) for pagination, sort, search, date range, and field filters.
 

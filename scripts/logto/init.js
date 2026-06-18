@@ -222,6 +222,44 @@ async function applyApplications(token, applications) {
   return result;
 }
 
+// Provision a dedicated M2M application for service-core with Logto Management
+// API access. service-core is the source of truth for organizations and drives
+// Logto as a downstream follower (creating orgs via the Management API); giving it
+// its own credentials — separate from the registrator's m-default — isolates
+// rotation and revocation. The app is created in the admin tenant, mirroring
+// m-default, and granted the same management role(s) m-default holds, so its
+// access is identical and guaranteed to work. (Logto OSS only exposes coarse
+// "all" management access, so the scope is broad by platform limitation.)
+// Returns the application ID. Idempotent.
+async function applyServiceCoreM2M(adminToken) {
+  const APP_NAME = 'Service Core';
+
+  const { data: apps } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/applications?page_size=50');
+  let app = Array.isArray(apps) && apps.find(a => a.name === APP_NAME && a.type === 'MachineToMachine');
+  if (!app) {
+    const { data } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', '/applications', {
+      name: APP_NAME,
+      type: 'MachineToMachine',
+    });
+    app = data;
+    console.log(`Created M2M application: ${APP_NAME} (${app.id})`);
+  } else {
+    console.log(`M2M application exists: ${APP_NAME} (${app.id})`);
+  }
+
+  // Grant the same management role(s) that m-default already holds.
+  const { data: refRoles } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/applications/m-default/roles?page_size=50');
+  const roleIds = (Array.isArray(refRoles) ? refRoles : []).map(r => r.id);
+  if (roleIds.length) {
+    await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'POST', `/applications/${app.id}/roles`, { roleIds });
+    console.log(`service-core M2M management access granted (${roleIds.length} role(s)).`);
+  } else {
+    console.warn('WARN: m-default has no roles to copy — service-core M2M may lack management access.');
+  }
+
+  return app.id;
+}
+
 // Configure Custom JWT access token claims from config.
 // Merges user roles and organization roles into a single flat "roles" array.
 // Includes organization_id when the token is org-scoped.
@@ -261,6 +299,7 @@ async function main() {
   await applyOrganizationRoles(defaultToken, config.organization_roles, scopeIndex);
   await applyJWT(defaultToken, config.jwt);
   const appIds = await applyApplications(defaultToken, config.applications);
+  const serviceCoreAppId = await applyServiceCoreM2M(adminToken);
 
   // Write per-app configs to shared volume for runtime consumption
   const adminAppId = appIds['Admin'];
@@ -330,6 +369,14 @@ async function main() {
     console.log('Admin role assigned (or already assigned).');
   }
 
+  // The admin tenant ships with signInMode "Register" — Logto only flips it to
+  // "SignIn" when the first admin is created through the console welcome flow.
+  // We create the admin user out-of-band via the Management API, so that flow
+  // never runs and the console stays stuck on a register-only screen (no sign-in
+  // form). Force sign-in mode so the existing admin can actually log in. Idempotent.
+  await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'PATCH', '/sign-in-exp', { signInMode: 'SignIn' });
+  console.log('Admin tenant sign-in mode set to SignIn.');
+
   // Add admin user to t-default org
   const { data: members } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/organizations/t-default/users');
   const isMember = Array.isArray(members) && members.some(m => m.id === userId);
@@ -359,6 +406,19 @@ async function main() {
   fs.chmodSync('/run/infra', 0o711);
   fs.chmodSync('/run/infra/registrator-m2m.json', 0o600);
   console.log('Registrator M2M credentials written to /run/infra/registrator-m2m.json.');
+
+  // Write service-core M2M credentials (dedicated app, same shared volume).
+  // Mirrors the registrator file: token from the admin endpoint, Management API
+  // calls against the default tenant (LOGTO_ENDPOINT). Owner-only (0600).
+  const serviceCoreSecret = await getAppSecret(serviceCoreAppId);
+  fs.writeFileSync('/run/infra/service-core-m2m.json', JSON.stringify({
+    clientId: serviceCoreAppId,
+    clientSecret: serviceCoreSecret,
+    tokenEndpoint: LOGTO_ADMIN_ENDPOINT,
+    apiEndpoint: LOGTO_ENDPOINT,
+  }), { mode: 0o600 });
+  fs.chmodSync('/run/infra/service-core-m2m.json', 0o600);
+  console.log('service-core M2M credentials written to /run/infra/service-core-m2m.json.');
 
   // Mark onboarding complete
   const { data: consoleCfg } = await api(LOGTO_ADMIN_ENDPOINT, adminToken, 'GET', '/configs/admin-console');
