@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { useLogto } from '@logto/vue'
 import { config } from './config'
 
-type Tenant = { id: string; slug: string; name: string }
+type Tenant = { id: string; slug: string; name: string; is_master: boolean }
 type Status = 'loading' | 'unknown' | 'error' | 'ready'
 
 const logto = useLogto()
@@ -19,13 +19,16 @@ const errorMsg = ref('')
 const userName = ref('')
 const orgToken = ref<'idle' | 'ok' | 'denied'>('idle')
 
-// The subdomain label is the tenant slug (e.g. acme.app.localhost → "acme").
-const slug = location.hostname.split('.')[0]
+// The backend maps this host to an org: the apex domain → master organization,
+// "<slug>.<base>" → that slug.
+const host = location.host
 const redirectUri = `${location.origin}/callback`
 
 async function resolveTenant() {
   try {
-    const res = await fetch(`${config.apiBaseUrl}/service-core/v1/tenant/by-slug/${slug}`)
+    const res = await fetch(
+      `${config.apiBaseUrl}/service-core/v1/tenant/by-host?host=${encodeURIComponent(host)}`,
+    )
     if (res.status === 404) {
       status.value = 'unknown'
       return
@@ -84,7 +87,7 @@ function logout() {
 
     <div v-else-if="status === 'unknown'" class="card">
       <h1>Unknown tenant</h1>
-      <p>No organization is registered for <code>{{ slug }}</code>.</p>
+      <p>No organization is registered for <code>{{ host }}</code>.</p>
     </div>
 
     <div v-else-if="status === 'error'" class="card">
@@ -96,7 +99,7 @@ function logout() {
 
     <div v-else class="card">
       <h1>Welcome to {{ tenant?.name }}</h1>
-      <p>Signed in as <strong>{{ userName }}</strong> · tenant <code>{{ tenant?.slug }}</code></p>
+      <p>Signed in as <strong>{{ userName }}</strong> · <code>{{ tenant?.is_master ? 'master (apex)' : tenant?.slug }}</code></p>
       <p v-if="orgToken === 'ok'" class="ok">Organization token acquired ✓</p>
       <p v-else-if="orgToken === 'denied'" class="note">
         No organization access yet — you are not a member of this organization.

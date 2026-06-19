@@ -156,6 +156,9 @@ services:
       # OIDC redirect-URI registration.
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      # Master organization (apex-domain org for the product owner) — seeded on
+      # startup if absent.
+      INFRA_MASTER_ORG_NAME: ${INFRA_MASTER_ORG_NAME:-Master}
       OUTBOX_POLL_INTERVAL: ${INFRA_CORE_OUTBOX_POLL_INTERVAL:-2s}
       OUTBOX_MAX_ATTEMPTS: ${INFRA_CORE_OUTBOX_MAX_ATTEMPTS:-10}
     healthcheck:
@@ -298,3 +301,10 @@ services:
       traefik.http.routers.tenant.entrypoints: "web"
       traefik.http.routers.tenant.priority: "1"
       traefik.http.services.tenant.loadbalancer.server.port: "80"
+      # Apex domain serves the master organization (empty slug) via the same app.
+      # Lower priority than the path routers on the apex (api/docs/openapi.json),
+      # which are more specific and win for their paths.
+      traefik.http.routers.tenant-apex.rule: "Host(`${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.tenant-apex.entrypoints: "web"
+      traefik.http.routers.tenant-apex.priority: "1"
+      traefik.http.routers.tenant-apex.service: "tenant"
