@@ -267,6 +267,10 @@ func (g *Generator) buildEndpoint(method, gatewayPath, backendPath, host string,
 		"method":          method,
 		"output_encoding": outputEncoding,
 		"backend":         []map[string]interface{}{backend},
+		// Forward all query strings to the backend. KrakenD drops query params by
+		// default, which silently breaks pagination/sort/search/filters and any
+		// required query param (e.g. tenant resolve by host).
+		"input_query_strings": []string{"*"},
 	}
 
 	if !protected {
