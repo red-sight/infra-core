@@ -1,0 +1,22 @@
+# Invoked as `air -c service-core/.air.toml` from /app (the workspace root), so
+# root="." watches the whole workspace (go.work, query/, service-core/) and the
+# build resolves the local query replace.
+root = "."
+tmp_dir = "/tmp/air"
+
+[build]
+  cmd = "go build -o /tmp/air/service-core ./service-core"
+  bin = "/tmp/air/service-core"
+  delay = 1000
+  exclude_dir = ["tmp"]
+  include_ext = ["go"]
+  # service-core shuts down gracefully on SIGINT (HTTP server + outbox worker);
+  # interrupt it and give that a moment before the hard kill.
+  send_interrupt = true
+  kill_delay = "2s"
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

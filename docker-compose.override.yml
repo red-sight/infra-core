@@ -55,6 +55,15 @@ services:
       - "8223:8222"
 
   service-core:
+    build:
+      target: dev
+    # Bind the workspace so air live-reloads on source changes. The build context
+    # is the repo root (go.work spans service-core + the local query module), so we
+    # mount the three pieces the workspace resolves rather than the whole repo.
+    volumes:
+      - ./go.work:/app/go.work
+      - ./query:/app/query
+      - ./service-core:/app/service-core
     depends_on:
       postgres:
         condition: service_healthy
