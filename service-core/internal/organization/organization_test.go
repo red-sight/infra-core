@@ -8,15 +8,16 @@ import (
 )
 
 func TestToResponseSyncedFlag(t *testing.T) {
+	h := &handler{}
 	ext := "logto-org-123"
-	if r := toResponse(Organization{ExternalID: &ext}); !r.Synced || r.ExternalID == nil {
+	if r := h.toResponse(Organization{ExternalID: &ext}); !r.Synced || r.ExternalID == nil {
 		t.Errorf("org with external_id should be synced: %+v", r)
 	}
-	if r := toResponse(Organization{}); r.Synced {
+	if r := h.toResponse(Organization{}); r.Synced {
 		t.Error("org without external_id must not be synced")
 	}
 	empty := ""
-	if r := toResponse(Organization{ExternalID: &empty}); r.Synced {
+	if r := h.toResponse(Organization{ExternalID: &empty}); r.Synced {
 		t.Error("org with empty external_id must not be synced")
 	}
 }

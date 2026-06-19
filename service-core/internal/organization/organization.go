@@ -35,11 +35,23 @@ type OrgResponse struct {
 	Slug        string    `json:"slug"        doc:"DNS-safe label addressing the tenant frontend subdomain"`
 	Name        string    `json:"name"        doc:"Organization name"`
 	Description string    `json:"description" doc:"Organization description"`
+	Domain      string    `json:"domain"      doc:"Frontend hostname the organization is served on (slug-derived; apex for the master org)"`
+	IsMaster    bool      `json:"is_master"   doc:"True if this is the master organization (apex domain, empty slug)"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-func toResponse(o Organization) OrgResponse {
+// domainFor derives the organization's frontend hostname. The master org (empty
+// slug) lives on the apex domain; everyone else on a "<slug>.<base>" subdomain.
+// Mirrors the origin derivation in provisionOrg, without the protocol.
+func (h *handler) domainFor(slug string) string {
+	if slug == "" {
+		return h.baseDomain
+	}
+	return slug + "." + h.baseDomain
+}
+
+func (h *handler) toResponse(o Organization) OrgResponse {
 	return OrgResponse{
 		ID:          o.ID,
 		ExternalID:  o.ExternalID,
@@ -47,6 +59,8 @@ func toResponse(o Organization) OrgResponse {
 		Slug:        o.Slug,
 		Name:        o.Name,
 		Description: o.Description,
+		Domain:      h.domainFor(o.Slug),
+		IsMaster:    o.Slug == "",
 		CreatedAt:   o.CreatedAt,
 		UpdatedAt:   o.UpdatedAt,
 	}
@@ -76,8 +90,8 @@ func validateSlug(slug string) error {
 	return nil
 }
 
-func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string) {
-	h := &handler{db: db, baseDomain: baseDomain}
+func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string, dir Directory) {
+	h := &handler{db: db, baseDomain: baseDomain, dir: dir}
 
 	huma.Register(api, huma.Operation{
 		OperationID: "list-organizations",
@@ -91,6 +105,32 @@ func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string) {
 			"x-infra-scopes":    []string{"read:organizations"},
 		},
 	}, h.list)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-organization",
+		Method:      http.MethodGet,
+		Path:        "/admin/organizations/{id}",
+		Summary:     "Get organization",
+		Description: "Returns a single organization by its internal ID.",
+		Tags:        []string{"Admin"},
+		Extensions: map[string]any{
+			"x-infra-protected": true,
+			"x-infra-scopes":    []string{"read:organizations"},
+		},
+	}, h.get)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-organization-members",
+		Method:      http.MethodGet,
+		Path:        "/admin/organizations/{id}/members",
+		Summary:     "List organization members",
+		Description: "Returns the organization's members and their org-scoped roles, sourced from the identity provider. Paginated; q is a case-insensitive match on name/email. An unprovisioned organization has no members yet and returns an empty list.",
+		Tags:        []string{"Admin"},
+		Extensions: map[string]any{
+			"x-infra-protected": true,
+			"x-infra-scopes":    []string{"read:organizations"},
+		},
+	}, h.listMembers)
 
 	huma.Register(api, huma.Operation{
 		OperationID:   "create-organization",
@@ -122,6 +162,29 @@ func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string) {
 type handler struct {
 	db         *gorm.DB
 	baseDomain string
+	dir        Directory
+}
+
+// MemberRole is an org-scoped role assigned to a member.
+type MemberRole struct {
+	ID   string `json:"id"   doc:"Role ID"`
+	Name string `json:"name" doc:"Role name"`
+}
+
+// Member is a user belonging to an organization, with their org-scoped roles.
+type Member struct {
+	ID     string       `json:"id"     doc:"User ID"`
+	Name   string       `json:"name"   doc:"Display name (falls back to username)"`
+	Email  string       `json:"email"  doc:"Primary email"`
+	Avatar string       `json:"avatar" doc:"Avatar URL (may be empty)"`
+	Roles  []MemberRole `json:"roles"  doc:"Org-scoped roles held in this organization"`
+}
+
+// Directory reads organization membership from the identity provider. Defined here
+// (returning provider-neutral types) so the domain package does not depend on a
+// concrete client; the Logto client implements it.
+type Directory interface {
+	ListMembers(ctx context.Context, orgExternalID string, page, pageSize int, q string) (members []Member, total int, err error)
 }
 
 type listInput struct {
@@ -173,7 +236,7 @@ func (h *handler) list(_ context.Context, input *listInput) (*listOutput, error)
 	out.Body.Total = total
 	out.Body.Items = make([]OrgResponse, len(orgs))
 	for i, o := range orgs {
-		out.Body.Items[i] = toResponse(o)
+		out.Body.Items[i] = h.toResponse(o)
 	}
 	return out, nil
 }
@@ -222,7 +285,83 @@ func (h *handler) create(ctx context.Context, input *createInput) (*createOutput
 		return nil, huma.Error500InternalServerError("failed to create organization")
 	}
 
-	out := &createOutput{Body: toResponse(org)}
+	out := &createOutput{Body: h.toResponse(org)}
+	return out, nil
+}
+
+type getInput struct {
+	ID string `path:"id" doc:"Internal organization ID"`
+}
+
+type getOutput struct {
+	Body OrgResponse
+}
+
+// get returns a single organization by its internal ID.
+func (h *handler) get(ctx context.Context, input *getInput) (*getOutput, error) {
+	// Guard the UUID format before hitting the DB so a malformed ID is a clean
+	// 404 rather than a Postgres "invalid input syntax for type uuid" 500.
+	if _, err := uuid.Parse(input.ID); err != nil {
+		return nil, huma.Error404NotFound("organization not found")
+	}
+
+	var org Organization
+	err := h.db.WithContext(ctx).First(&org, "id = ?", input.ID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, huma.Error404NotFound("organization not found")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("failed to fetch organization")
+	}
+
+	return &getOutput{Body: h.toResponse(org)}, nil
+}
+
+type listMembersInput struct {
+	ID string `path:"id" doc:"Internal organization ID"`
+	query.PageInput
+	query.SearchInput
+}
+
+type listMembersOutput struct {
+	Body struct {
+		Items []Member `json:"items"`
+		Total int      `json:"total"`
+	}
+}
+
+// listMembers proxies the organization's membership from the identity provider.
+// Membership lives in Logto, not core, so this reads through the Directory rather
+// than the DB. An organization not yet provisioned (no external_id) has no members
+// there and returns an empty page rather than an error.
+func (h *handler) listMembers(ctx context.Context, input *listMembersInput) (*listMembersOutput, error) {
+	if _, err := uuid.Parse(input.ID); err != nil {
+		return nil, huma.Error404NotFound("organization not found")
+	}
+
+	var org Organization
+	err := h.db.WithContext(ctx).First(&org, "id = ?", input.ID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, huma.Error404NotFound("organization not found")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("failed to fetch organization")
+	}
+
+	out := &listMembersOutput{}
+	out.Body.Items = []Member{}
+	if org.ExternalID == nil || *org.ExternalID == "" {
+		return out, nil
+	}
+
+	members, total, err := h.dir.ListMembers(ctx, *org.ExternalID, input.Page, input.PageSize, input.Q)
+	if err != nil {
+		return nil, huma.Error502BadGateway("failed to list organization members")
+	}
+	if members != nil {
+		out.Body.Items = members
+	}
+	out.Body.Total = total
 	return out, nil
 }
 

@@ -80,7 +80,7 @@ func main() {
 	})
 
 	api := humachi.New(router, huma.DefaultConfig("Service Core", "v1"))
-	organization.RegisterRoutes(api, db, baseDomain)
+	organization.RegisterRoutes(api, db, baseDomain, logtoClient)
 
 	srv := &http.Server{
 		Addr:    ":" + env("PORT", "8080"),

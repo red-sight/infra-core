@@ -14,9 +14,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	orgdom "infra/service-core/internal/organization"
 )
 
 // httpTimeout bounds every outbound Logto request. Outbox delivery runs under a
@@ -144,6 +147,63 @@ func (c *Client) EnsureTenantRedirectURI(ctx context.Context, origin string) err
 	return c.do(ctx, http.MethodPatch, "/api/applications/"+appID, body, nil)
 }
 
+// orgUser is the subset of Logto's organization-user shape we surface. Logto
+// embeds each user's org-scoped roles inline, so one call covers members + roles.
+type orgUser struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Username          string `json:"username"`
+	PrimaryEmail      string `json:"primaryEmail"`
+	Avatar            string `json:"avatar"`
+	OrganizationRoles []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"organizationRoles"`
+}
+
+// ListMembers returns an organization's members and their org-scoped roles from
+// Logto. orgID is the Logto organization id (the org's external_id). The page is
+// 1-based; q is a case-insensitive substring match on name/email. total comes from
+// Logto's Total-Number header. Returns provider-neutral organization.Member values
+// so callers never see Logto's wire shape.
+func (c *Client) ListMembers(ctx context.Context, orgID string, page, pageSize int, q string) ([]orgdom.Member, int, error) {
+	qs := url.Values{
+		"page":      {strconv.Itoa(page)},
+		"page_size": {strconv.Itoa(pageSize)},
+	}
+	if q != "" {
+		qs.Set("q", q)
+	}
+	path := "/api/organizations/" + url.PathEscape(orgID) + "/users?" + qs.Encode()
+
+	var users []orgUser
+	hdr, err := c.doH(ctx, http.MethodGet, path, nil, &users)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, _ := strconv.Atoi(hdr.Get("Total-Number"))
+
+	members := make([]orgdom.Member, len(users))
+	for i, u := range users {
+		name := u.Name
+		if name == "" {
+			name = u.Username
+		}
+		roles := make([]orgdom.MemberRole, len(u.OrganizationRoles))
+		for j, r := range u.OrganizationRoles {
+			roles[j] = orgdom.MemberRole{ID: r.ID, Name: r.Name}
+		}
+		members[i] = orgdom.Member{
+			ID:     u.ID,
+			Name:   name,
+			Email:  u.PrimaryEmail,
+			Avatar: u.Avatar,
+			Roles:  roles,
+		}
+	}
+	return members, total, nil
+}
+
 func contains(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {
@@ -252,26 +312,33 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 
 // do performs an authenticated Management API request. body and out are optional.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	_, err := c.doH(ctx, method, path, body, out)
+	return err
+}
+
+// doH is do but also returns the response headers, for endpoints whose pagination
+// total is carried out-of-band (Logto sets Total-Number on list responses).
+func (c *Client) doH(ctx context.Context, method, path string, body, out any) (http.Header, error) {
 	if err := c.loadCreds(); err != nil {
-		return err
+		return nil, err
 	}
 	token, err := c.getToken(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader = bytes.NewReader(raw)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.creds.APIEndpoint+path, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
@@ -280,16 +347,18 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("logto: %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("logto: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("logto: %s %s → %d: %s", method, path, resp.StatusCode, b)
+		return nil, fmt.Errorf("logto: %s %s → %d: %s", method, path, resp.StatusCode, b)
 	}
-	if out == nil {
-		return nil
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return nil, err
+		}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return resp.Header, nil
 }
