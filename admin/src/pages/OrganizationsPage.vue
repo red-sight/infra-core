@@ -240,8 +240,11 @@ async function submit() {
                 <div class="idcell">
                   <Avatar :name="o.name" size="sm" square />
                   <div class="idcell__main">
-                    <div class="idcell__name">{{ o.name }}</div>
-                    <div class="idcell__sub mono">{{ o.slug }}</div>
+                    <div class="idcell__name">
+                      {{ o.name }}
+                      <Badge v-if="!o.slug" variant="violet">Master</Badge>
+                    </div>
+                    <div class="idcell__sub mono">{{ o.slug || 'apex domain' }}</div>
                   </div>
                 </div>
               </td>
@@ -323,7 +326,7 @@ async function submit() {
           <div style="font-weight: 600; margin-bottom: 12px; font-size: 13.5px">Details</div>
           <dl class="dl">
             <dt>Name</dt><dd>{{ selected.name }}</dd>
-            <dt>Slug</dt><dd class="mono">{{ selected.slug }}</dd>
+            <dt>Slug</dt><dd class="mono">{{ selected.slug || 'apex domain (master)' }}</dd>
             <dt>Description</dt><dd>{{ selected.description || '—' }}</dd>
             <dt>Organization ID</dt><dd class="mono">{{ selected.id }}</dd>
             <dt>Logto ID</dt><dd class="mono">{{ selected.external_id || '— (not yet provisioned)' }}</dd>
