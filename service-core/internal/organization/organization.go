@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -75,8 +76,8 @@ func validateSlug(slug string) error {
 	return nil
 }
 
-func RegisterRoutes(api huma.API, db *gorm.DB) {
-	h := &handler{db: db}
+func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string) {
+	h := &handler{db: db, baseDomain: baseDomain}
 
 	huma.Register(api, huma.Operation{
 		OperationID: "list-organizations",
@@ -106,19 +107,22 @@ func RegisterRoutes(api huma.API, db *gorm.DB) {
 	}, h.create)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "get-tenant-by-slug",
+		OperationID: "get-tenant-by-host",
 		Method:      http.MethodGet,
-		Path:        "/tenant/by-slug/{slug}",
-		Summary:     "Resolve tenant by slug",
-		Description: "Public endpoint the tenant frontend calls (before login) to resolve its organization from the subdomain.",
+		Path:        "/tenant/by-host",
+		Summary:     "Resolve tenant by host",
+		Description: "Public endpoint the tenant frontend calls (before login) to resolve its organization from its hostname. The apex domain maps to the master organization; a subdomain maps to the org with that slug.",
 		Tags:        []string{"Tenant"},
 		Extensions: map[string]any{
 			"x-infra-protected": false,
 		},
-	}, h.getBySlug)
+	}, h.getByHost)
 }
 
-type handler struct{ db *gorm.DB }
+type handler struct {
+	db         *gorm.DB
+	baseDomain string
+}
 
 type listInput struct {
 	query.PageInput
@@ -222,23 +226,44 @@ func (h *handler) create(ctx context.Context, input *createInput) (*createOutput
 	return out, nil
 }
 
-type getBySlugInput struct {
-	Slug string `path:"slug" doc:"Tenant slug"`
+type getByHostInput struct {
+	Host string `query:"host" required:"true" doc:"Frontend hostname, e.g. acme.app.localhost or the apex app.localhost"`
 }
 
 type tenantOutput struct {
 	Body struct {
-		ID   string `json:"id"   doc:"Internal organization ID"`
-		Slug string `json:"slug" doc:"Tenant slug"`
-		Name string `json:"name" doc:"Organization name"`
+		ID       string `json:"id"        doc:"Internal organization ID"`
+		Slug     string `json:"slug"      doc:"Tenant slug (empty for the master organization)"`
+		Name     string `json:"name"      doc:"Organization name"`
+		IsMaster bool   `json:"is_master" doc:"True if this is the master organization (apex domain)"`
 	}
 }
 
-// getBySlug resolves an organization from its subdomain slug. Public (no auth):
-// the tenant frontend calls it before login to learn which organization it is.
-func (h *handler) getBySlug(ctx context.Context, input *getBySlugInput) (*tenantOutput, error) {
+// getByHost resolves an organization from its frontend hostname. Public (no auth):
+// the tenant frontend calls it before login. The apex domain (== base domain) maps
+// to the master organization (empty slug); "<slug>.<base>" maps to that slug.
+func (h *handler) getByHost(ctx context.Context, input *getByHostInput) (*tenantOutput, error) {
+	host := strings.ToLower(input.Host)
+	if i := strings.IndexByte(host, ':'); i >= 0 {
+		host = host[:i] // strip any port
+	}
+
+	var slug string
+	switch {
+	case host == h.baseDomain:
+		slug = "" // apex → master organization
+	case strings.HasSuffix(host, "."+h.baseDomain):
+		label := strings.TrimSuffix(host, "."+h.baseDomain)
+		if label == "" || strings.Contains(label, ".") {
+			return nil, huma.Error404NotFound("unknown tenant host")
+		}
+		slug = label
+	default:
+		return nil, huma.Error404NotFound("unknown tenant host")
+	}
+
 	var org Organization
-	err := h.db.WithContext(ctx).First(&org, "slug = ?", input.Slug).Error
+	err := h.db.WithContext(ctx).First(&org, "slug = ?", slug).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, huma.Error404NotFound("organization not found")
 	}
@@ -250,6 +275,7 @@ func (h *handler) getBySlug(ctx context.Context, input *getBySlugInput) (*tenant
 	out.Body.ID = org.ID
 	out.Body.Slug = org.Slug
 	out.Body.Name = org.Name
+	out.Body.IsMaster = org.Slug == ""
 	return out, nil
 }
 
@@ -330,7 +356,41 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 	}
 
 	// Step 2: ensure the tenant frontend's redirect URI is registered. Idempotent,
-	// re-run on every retry until it succeeds.
-	origin := fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, org.Slug, cfg.BaseDomain)
+	// re-run on every retry until it succeeds. The master organization (empty slug)
+	// lives on the apex domain; everyone else on a subdomain.
+	var origin string
+	if org.Slug == "" {
+		origin = fmt.Sprintf("%s://%s", cfg.HTTPProtocol, cfg.BaseDomain)
+	} else {
+		origin = fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, org.Slug, cfg.BaseDomain)
+	}
 	return p.EnsureTenantRedirectURI(ctx, origin)
+}
+
+// EnsureMaster seeds the master organization (the product owner's org, hosted on
+// the apex domain) if it does not yet exist. The master is the row with an empty
+// slug; UNIQUE(slug) guarantees there is at most one. Idempotent and safe under
+// concurrent startups (a lost race surfaces as a duplicate-key, treated as done).
+// Like a normal create, it enqueues an outbox event so the org is provisioned in
+// the identity provider with the apex redirect URI.
+func EnsureMaster(db *gorm.DB, name string) error {
+	var count int64
+	if err := db.Model(&Organization{}).Where("slug = ?", "").Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	org := Organization{ID: uuid.NewString(), Slug: "", Name: name}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&org).Error; err != nil {
+			return err
+		}
+		return outbox.Enqueue(tx, "organization", org.ID, EventOrgCreated, orgCreatedPayload{Name: org.Name})
+	})
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return nil // another replica seeded it first
+	}
+	return err
 }

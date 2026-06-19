@@ -42,6 +42,14 @@ func main() {
 
 	db := mustDB(dsn)
 
+	baseDomain := env("INFRA_HTTP_BASE_DOMAIN", "app.localhost")
+
+	// Seed the master organization (apex-domain org for the product owner) if it
+	// does not exist yet. Idempotent.
+	if err := organization.EnsureMaster(db, env("INFRA_MASTER_ORG_NAME", "Master")); err != nil {
+		log.Fatalf("seed master organization: %v", err)
+	}
+
 	// Cancelled on SIGINT/SIGTERM so the outbox worker and HTTP server shut down
 	// gracefully.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -56,7 +64,7 @@ func main() {
 	)
 	handler := organization.NewOutboxHandler(logtoClient, organization.HandlerConfig{
 		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
-		BaseDomain:   env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
+		BaseDomain:   baseDomain,
 	})
 	worker := outbox.NewWorker(db, handler, outbox.Config{
 		PollInterval: envDuration("OUTBOX_POLL_INTERVAL", 2*time.Second),
@@ -72,7 +80,7 @@ func main() {
 	})
 
 	api := humachi.New(router, huma.DefaultConfig("Service Core", "v1"))
-	organization.RegisterRoutes(api, db)
+	organization.RegisterRoutes(api, db, baseDomain)
 
 	srv := &http.Server{
 		Addr:    ":" + env("PORT", "8080"),
