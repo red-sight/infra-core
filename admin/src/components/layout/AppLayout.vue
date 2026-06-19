@@ -11,7 +11,12 @@ import ToastRegion from '@/components/ui/ToastRegion.vue'
 const { isAuthenticated, isLoading, signIn } = useLogto()
 const route = useRoute()
 
-const current = computed(() => (route.name as string) ?? 'overview')
+// Sidebar highlight, topbar title, and the <main> remount key all key off the nav
+// section (a screen id). Detail routes carry meta.section to map back to their
+// top-level item; for nav screens the route name already equals the screen id.
+// Keying <main> by section (not the leaf route name) keeps the detail page mounted
+// across its tab routes instead of remounting on every tab switch.
+const section = computed(() => (route.meta.section as string) ?? (route.name as string) ?? 'overview')
 
 const cmdOpen = ref(false)
 const mobileOpen = ref(false)
@@ -37,15 +42,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 <template>
   <template v-if="isAuthenticated">
     <div class="app-shell">
-      <Sidebar :current="current" />
+      <Sidebar :current="section" />
       <div class="app-main">
-        <TopBar :current="current" @open-cmd="cmdOpen = true" @open-mobile="mobileOpen = true" />
-        <main :key="current">
+        <TopBar :current="section" @open-cmd="cmdOpen = true" @open-mobile="mobileOpen = true" />
+        <main :key="section">
           <RouterView />
         </main>
       </div>
     </div>
-    <MobileNav :open="mobileOpen" :current="current" @close="mobileOpen = false" />
+    <MobileNav :open="mobileOpen" :current="section" @close="mobileOpen = false" />
     <CommandPalette :open="cmdOpen" @close="cmdOpen = false" />
     <ToastRegion />
   </template>

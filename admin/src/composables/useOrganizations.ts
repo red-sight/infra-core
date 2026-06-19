@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
-import type { Ref } from 'vue'
+import { computed, type Ref } from 'vue'
 import { useApi } from '@/lib/api'
 
 /** Mirrors service-core's OrgResponse. external_id is null until the org is
- *  provisioned in the identity provider; `synced` is the derived flag. */
+ *  provisioned in the identity provider; `synced` is the derived flag.
+ *  `domain` is server-derived (slug-based; apex for the master org). */
 export interface Organization {
   id: string
   external_id: string | null
@@ -11,6 +12,8 @@ export interface Organization {
   slug: string
   name: string
   description: string
+  domain: string
+  is_master: boolean
   created_at: string
   updated_at: string
 }
@@ -59,6 +62,60 @@ export function useOrganizations(params: Ref<OrgListParams>) {
     },
     // Keep showing the previous page while the next loads — no flicker on paging.
     placeholderData: (prev) => prev,
+  })
+}
+
+/** A user's org-scoped role, as surfaced by service-core (sourced from Logto). */
+export interface MemberRole {
+  id: string
+  name: string
+}
+
+/** A member of an organization with their org-scoped roles. */
+export interface OrgMember {
+  id: string
+  name: string
+  email: string
+  avatar: string
+  roles: MemberRole[]
+}
+
+export interface MembersParams {
+  page: number
+  page_size: number
+  q?: string
+}
+
+export interface MembersResponse {
+  items: OrgMember[]
+  total: number
+}
+
+export function useOrgMembers(id: Ref<string>, params: Ref<MembersParams>) {
+  const { request } = useApi()
+
+  return useQuery({
+    queryKey: [KEY, id, 'members', params],
+    queryFn: () => {
+      const qs = new URLSearchParams()
+      const p = params.value
+      qs.set('page', String(p.page))
+      qs.set('page_size', String(p.page_size))
+      if (p.q) qs.set('q', p.q)
+      return request<MembersResponse>(`${BASE}/${id.value}/members?${qs.toString()}`)
+    },
+    enabled: computed(() => !!id.value),
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useOrganization(id: Ref<string>) {
+  const { request } = useApi()
+
+  return useQuery({
+    queryKey: [KEY, id],
+    queryFn: () => request<Organization>(`${BASE}/${id.value}`),
+    enabled: computed(() => !!id.value),
   })
 }
 
