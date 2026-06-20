@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -495,15 +496,48 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 	}
 
 	// Step 2: ensure the tenant frontend's redirect URI is registered. Idempotent,
-	// re-run on every retry until it succeeds. The master organization (empty slug)
-	// lives on the apex domain; everyone else on a subdomain.
-	var origin string
-	if org.Slug == "" {
-		origin = fmt.Sprintf("%s://%s", cfg.HTTPProtocol, cfg.BaseDomain)
-	} else {
-		origin = fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, org.Slug, cfg.BaseDomain)
+	// re-run on every retry until it succeeds.
+	return p.EnsureTenantRedirectURI(ctx, originFor(cfg, org.Slug))
+}
+
+// originFor derives a tenant frontend's origin (<proto>://<slug>.<base>). The
+// master organization (empty slug) lives on the apex domain; everyone else on a
+// subdomain. Shared by provisioning and reconciliation.
+func originFor(cfg HandlerConfig, slug string) string {
+	if slug == "" {
+		return fmt.Sprintf("%s://%s", cfg.HTTPProtocol, cfg.BaseDomain)
 	}
-	return p.EnsureTenantRedirectURI(ctx, origin)
+	return fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, slug, cfg.BaseDomain)
+}
+
+// ReconcileRedirectURIs re-registers every provisioned organization's tenant
+// redirect URI in the identity provider. Those URIs are runtime state on the
+// shared Tenant app that an identity-provider re-init can reset; this idempotent
+// pass (safe on every startup) re-adds them so existing tenants keep working.
+// Best-effort: a per-org failure is logged and counted, the rest still run, and a
+// non-nil error is returned if any failed so the caller can retry the whole pass
+// (e.g. while M2M credentials are not yet available at startup).
+func ReconcileRedirectURIs(ctx context.Context, db *gorm.DB, p OrgProvisioner, cfg HandlerConfig) error {
+	var orgs []Organization
+	if err := db.WithContext(ctx).Find(&orgs).Error; err != nil {
+		return err
+	}
+
+	var failed int
+	for _, o := range orgs {
+		// Only provisioned orgs have a tenant presence to register.
+		if o.ExternalID == nil || *o.ExternalID == "" {
+			continue
+		}
+		if err := p.EnsureTenantRedirectURI(ctx, originFor(cfg, o.Slug)); err != nil {
+			log.Printf("reconcile redirect uri: org %q (%s): %v", o.Slug, o.ID, err)
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("reconcile redirect uris: %d organization(s) failed", failed)
+	}
+	return nil
 }
 
 // EnsureMaster seeds the master organization (the product owner's org, hosted on

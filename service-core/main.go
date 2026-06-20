@@ -62,15 +62,36 @@ func main() {
 		env("INFRA_SERVICE_CORE_M2M_FILE", "/run/infra/service-core-m2m.json"),
 		env("INFRA_TENANT_APP_FILE", "/run/infra/tenant-app.json"),
 	)
-	handler := organization.NewOutboxHandler(logtoClient, organization.HandlerConfig{
+	orgCfg := organization.HandlerConfig{
 		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
 		BaseDomain:   baseDomain,
-	})
+	}
+	handler := organization.NewOutboxHandler(logtoClient, orgCfg)
 	worker := outbox.NewWorker(db, handler, outbox.Config{
 		PollInterval: envDuration("OUTBOX_POLL_INTERVAL", 2*time.Second),
 		MaxAttempts:  envInt("OUTBOX_MAX_ATTEMPTS", 10),
 	})
 	go worker.Run(ctx)
+
+	// Reconcile tenant redirect URIs in the background: the identity provider's
+	// shared Tenant app can have its redirect URIs reset by a re-init, dropping the
+	// per-tenant callbacks. This idempotent pass re-adds them. Retry rides out the
+	// startup window before M2M creds are written; it stops once a full pass clears.
+	go func() {
+		for {
+			if err := organization.ReconcileRedirectURIs(ctx, db, logtoClient, orgCfg); err != nil {
+				log.Printf("redirect-uri reconcile incomplete, retrying in 10s: %v", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(10 * time.Second):
+					continue
+				}
+			}
+			log.Println("redirect-uri reconcile complete")
+			return
+		}
+	}()
 
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
