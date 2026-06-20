@@ -187,6 +187,14 @@ async function applyOrganizationRoles(token, orgRoles, scopeIndex) {
   }
 }
 
+// Union of two URI lists, order-preserving and de-duplicated. Used so re-running
+// init only ensures the configured base URIs are present without clobbering URIs
+// added at runtime (service-core appends per-tenant callbacks to the shared Tenant
+// app via the Management API on every org provision).
+function unionUris(existing, configured) {
+  return [...new Set([...(existing ?? []), ...(configured ?? [])])];
+}
+
 // Create SPA/Native applications declared in config.
 // Returns a map of application name → application ID.
 async function applyApplications(token, applications) {
@@ -208,14 +216,20 @@ async function applyApplications(token, applications) {
       result[app.name] = data.id;
       console.log(`Created application: ${app.name} (${data.id})`);
     } else {
+      // Merge, don't replace: preserve runtime-added redirect URIs (and any other
+      // oidcClientMetadata fields) so init stays idempotent without wiping the
+      // per-tenant callbacks service-core registers.
+      const { data: cur } = await api(LOGTO_ENDPOINT, token, 'GET', `/applications/${found.id}`);
+      const curMeta = cur.oidcClientMetadata ?? {};
       await api(LOGTO_ENDPOINT, token, 'PATCH', `/applications/${found.id}`, {
         oidcClientMetadata: {
-          redirectUris: app.redirectUris ?? [],
-          postLogoutRedirectUris: app.postLogoutRedirectUris ?? [],
+          ...curMeta,
+          redirectUris: unionUris(curMeta.redirectUris, app.redirectUris),
+          postLogoutRedirectUris: unionUris(curMeta.postLogoutRedirectUris, app.postLogoutRedirectUris),
         },
       });
       result[app.name] = found.id;
-      console.log(`Application exists: ${app.name} (${found.id})`);
+      console.log(`Application exists: ${app.name} (${found.id}) — redirect URIs merged`);
     }
   }
 
