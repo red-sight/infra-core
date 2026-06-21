@@ -437,6 +437,11 @@ type OrgProvisioner interface {
 	// Create provisions the organization in the identity provider, stamping the
 	// core ID on its custom data, and returns the external ID.
 	Create(ctx context.Context, name, description, coreID string) (externalID string, err error)
+	// EnsureRoleAccess grants the organization access to the shared platform roles
+	// so its members can be assigned org_owner/org_user (in Zitadel this is a
+	// project grant of the Infra API project to the org). Idempotent. Without it,
+	// the org's users get no roles in their tokens.
+	EnsureRoleAccess(ctx context.Context, externalID string) error
 	// EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs
 	// for the given origin on the shared Tenant application. Idempotent.
 	EnsureTenantRedirectURI(ctx context.Context, origin string) error
@@ -470,8 +475,11 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 	}
 
 	// Step 1: ensure the organization exists in the identity provider (external_id).
-	if org.ExternalID == nil || *org.ExternalID == "" {
-		var extID string
+	extID := ""
+	if org.ExternalID != nil {
+		extID = *org.ExternalID
+	}
+	if extID == "" {
 		// Only retries can safely look up: a prior attempt may have created the org
 		// but failed to commit locally — reconcile by core ID before duplicating.
 		if ev.Attempts > 0 {
@@ -495,7 +503,13 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 		}
 	}
 
-	// Step 2: ensure the tenant frontend's redirect URI is registered. Idempotent,
+	// Step 2: grant the org access to the shared platform roles (idempotent), so its
+	// members can hold org_owner/org_user. Re-run on every retry until it succeeds.
+	if err := p.EnsureRoleAccess(ctx, extID); err != nil {
+		return err
+	}
+
+	// Step 3: ensure the tenant frontend's redirect URI is registered. Idempotent,
 	// re-run on every retry until it succeeds.
 	return p.EnsureTenantRedirectURI(ctx, originFor(cfg, org.Slug))
 }

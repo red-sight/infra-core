@@ -21,9 +21,9 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"infra/service-core/internal/logto"
 	"infra/service-core/internal/organization"
 	"infra/service-core/internal/outbox"
+	"infra/service-core/internal/zitadel"
 )
 
 //go:embed migrations/*.sql
@@ -44,10 +44,10 @@ func main() {
 
 	baseDomain := env("INFRA_HTTP_BASE_DOMAIN", "app.localhost")
 
-	// Seed the master organization (apex-domain org for the product owner) if it
-	// does not exist yet. Idempotent.
-	if err := organization.EnsureMaster(db, env("INFRA_MASTER_ORG_NAME", "Master")); err != nil {
-		log.Fatalf("seed master organization: %v", err)
+	// Seed the default (master) organization — the apex-domain org for the
+	// non-SaaS case — if it does not exist yet. Idempotent.
+	if err := organization.EnsureMaster(db, env("INFRA_DEFAULT_ORG_NAME", "Master")); err != nil {
+		log.Fatalf("seed default organization: %v", err)
 	}
 
 	// Cancelled on SIGINT/SIGTERM so the outbox worker and HTTP server shut down
@@ -55,10 +55,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Outbox worker: provisions organizations in Logto downstream of the local
-	// write. The Logto client reads M2M creds lazily (logto-init may not have
-	// written them yet at startup).
-	logtoClient := logto.New(
+	// Outbox worker: provisions organizations in Zitadel downstream of the local
+	// write. The client reads its machine-user PAT lazily (zitadel-init may not
+	// have written it yet at startup).
+	idp := zitadel.New(
 		env("INFRA_SERVICE_CORE_M2M_FILE", "/run/infra/service-core-m2m.json"),
 		env("INFRA_TENANT_APP_FILE", "/run/infra/tenant-app.json"),
 	)
@@ -66,7 +66,7 @@ func main() {
 		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
 		BaseDomain:   baseDomain,
 	}
-	handler := organization.NewOutboxHandler(logtoClient, orgCfg)
+	handler := organization.NewOutboxHandler(idp, orgCfg)
 	worker := outbox.NewWorker(db, handler, outbox.Config{
 		PollInterval: envDuration("OUTBOX_POLL_INTERVAL", 2*time.Second),
 		MaxAttempts:  envInt("OUTBOX_MAX_ATTEMPTS", 10),
@@ -79,7 +79,7 @@ func main() {
 	// startup window before M2M creds are written; it stops once a full pass clears.
 	go func() {
 		for {
-			if err := organization.ReconcileRedirectURIs(ctx, db, logtoClient, orgCfg); err != nil {
+			if err := organization.ReconcileRedirectURIs(ctx, db, idp, orgCfg); err != nil {
 				log.Printf("redirect-uri reconcile incomplete, retrying in 10s: %v", err)
 				select {
 				case <-ctx.Done():
@@ -101,7 +101,7 @@ func main() {
 	})
 
 	api := humachi.New(router, huma.DefaultConfig("Service Core", "v1"))
-	organization.RegisterRoutes(api, db, baseDomain, logtoClient)
+	organization.RegisterRoutes(api, db, baseDomain, idp)
 
 	srv := &http.Server{
 		Addr:    ":" + env("PORT", "8080"),
