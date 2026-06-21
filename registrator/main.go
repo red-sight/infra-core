@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -11,9 +12,9 @@ import (
 	"time"
 
 	"infra/registrator/internal/gateway"
-	"infra/registrator/internal/logto"
 	"infra/registrator/internal/openapi"
 	"infra/registrator/internal/registrar"
+	"infra/registrator/internal/roles"
 )
 
 func env(key, def string) string {
@@ -91,7 +92,7 @@ func main() {
 		BaseDomain:       env("INFRA_HTTP_BASE_DOMAIN", "app.localhost"),
 		OIDCSubdomain:    env("INFRA_HTTP_OIDC_SUBDOMAIN", "auth"),
 		APIRoute:         env("INFRA_API_ROUTE", "api"),
-		LogtoResourceID:  env("INFRA_LOGTO_API_RESOURCE_ID", ""),
+		Audience:         readProjectID(env("INFRA_ZITADEL_PLATFORM_FILE", "/run/infra/zitadel-platform.json")),
 		ConfigPath:       env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
 		CORSAllowOrigins: corsAllowOrigins(),
 	})
@@ -104,7 +105,10 @@ func main() {
 		gen.SetValidator(v.validate)
 	}
 
-	logtoClient := logto.New()
+	rolesProvider, err := roles.New()
+	if err != nil {
+		log.Fatalf("roles: %v", err)
+	}
 
 	rmode := resolveReloadMode(mode)
 	log.Printf("reload mode: %s", rmode)
@@ -114,13 +118,13 @@ func main() {
 		runner = &artifactRunner{
 			registry:       registry,
 			gen:            gen,
-			lc:             logtoClient,
+			rp:             rolesProvider,
 			docker:         docker,
 			krakendService: env("INFRA_KRAKEND_SERVICE", "infra_krakend"),
 			configTarget:   env("INFRA_KRAKEND_CONFIG_PATH", "/etc/krakend/krakend.json"),
 		}
 	default:
-		runner = &autoRunner{registry: registry, agg: agg, gen: gen, lc: logtoClient, docker: docker}
+		runner = &autoRunner{registry: registry, agg: agg, gen: gen, rp: rolesProvider, docker: docker}
 	}
 
 	// One-shot modes: a single synchronous scan, then act and exit. No watcher,
@@ -128,9 +132,9 @@ func main() {
 	if *dryRun {
 		n := scanOnce(adapter, registry)
 		log.Printf("dry-run: %d service(s)", n)
-		scopeRoles, err := logtoClient.ScopeRoles()
+		scopeRoles, err := rolesProvider.ScopeRoles()
 		if err != nil {
-			log.Printf("logto: scope→roles unavailable (%v); rendering with deny-all for scoped endpoints (fail-closed)", err)
+			log.Printf("roles: scope→roles unavailable (%v); rendering with deny-all for scoped endpoints (fail-closed)", err)
 		}
 		data, err := gen.Render(gatewayServices(registry), scopeRoles)
 		if err != nil {
@@ -204,6 +208,27 @@ func main() {
 
 	log.Println("listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
+}
+
+// readProjectID reads the Zitadel platform project id (the JWT audience) from the
+// descriptor zitadel-init writes to the shared volume. Retries briefly to ride out
+// the startup race before init has written it; logs and returns "" if still absent
+// (tokens then fail audience validation — visible, not silently open).
+func readProjectID(path string) string {
+	for attempt := 0; attempt < 30; attempt++ {
+		if data, err := os.ReadFile(path); err == nil {
+			var d struct {
+				ProjectID string `json:"projectId"`
+			}
+			if json.Unmarshal(data, &d) == nil && d.ProjectID != "" {
+				log.Printf("audience (zitadel project id): %s", d.ProjectID)
+				return d.ProjectID
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	log.Printf("WARNING: %s not available; JWT audience empty until restart", path)
+	return ""
 }
 
 func parseDelay(s string) time.Duration {

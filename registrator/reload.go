@@ -5,9 +5,9 @@ import (
 	"sync"
 
 	"infra/registrator/internal/gateway"
-	"infra/registrator/internal/logto"
 	"infra/registrator/internal/openapi"
 	"infra/registrator/internal/registrar"
+	"infra/registrator/internal/roles"
 )
 
 // reloadMode selects what happens to a freshly generated config — the only thing
@@ -52,7 +52,7 @@ type autoRunner struct {
 	registry *registrar.Registry
 	agg      *openapi.Aggregator
 	gen      *gateway.Generator
-	lc       *logto.Client
+	rp       *roles.Provider
 	docker   *registrar.DockerClient
 }
 
@@ -60,7 +60,7 @@ func (a *autoRunner) run() {
 	reloadMu.Lock()
 	defer reloadMu.Unlock()
 
-	res := generate(a.registry, a.agg, a.gen, a.lc)
+	res := generate(a.registry, a.agg, a.gen, a.rp)
 	if !res.changed() {
 		return
 	}
@@ -78,7 +78,7 @@ func (a *autoRunner) run() {
 type artifactRunner struct {
 	registry       *registrar.Registry
 	gen            *gateway.Generator
-	lc             *logto.Client
+	rp             *roles.Provider
 	docker         *registrar.DockerClient
 	krakendService string
 	configTarget   string
@@ -88,9 +88,9 @@ func (a *artifactRunner) run() {
 	reloadMu.Lock()
 	defer reloadMu.Unlock()
 
-	scopeRoles, err := a.lc.ScopeRoles()
+	scopeRoles, err := a.rp.ScopeRoles()
 	if err != nil {
-		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
+		log.Printf("roles: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
 	}
 	if err := deliverArtifact(a.gen, a.docker, gatewayServices(a.registry), scopeRoles, a.krakendService, a.configTarget); err != nil {
 		log.Printf("artifact delivery: %v", err)
@@ -152,7 +152,7 @@ func openapiServices(registry *registrar.Registry) []openapi.ServiceInfo {
 
 // generate (auto mode) rebuilds the aggregated OpenAPI spec and the KrakenD
 // config, writing both atomically as a side effect, and reports what changed.
-func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, lc *logto.Client) genResult {
+func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gateway.Generator, rp *roles.Provider) genResult {
 	res := genResult{serviceCount: len(registry.Services())}
 
 	opChanged, err := agg.Aggregate(openapiServices(registry))
@@ -161,9 +161,9 @@ func generate(registry *registrar.Registry, agg *openapi.Aggregator, gen *gatewa
 	}
 	res.openapiChanged = opChanged
 
-	scopeRoles, err := lc.ScopeRoles()
+	scopeRoles, err := rp.ScopeRoles()
 	if err != nil {
-		log.Printf("logto: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
+		log.Printf("roles: scope→roles unavailable (%v); endpoints with required scopes will deny all until the mapping is available (fail-closed)", err)
 	}
 
 	gwChanged, err := gen.Generate(gatewayServices(registry), scopeRoles)

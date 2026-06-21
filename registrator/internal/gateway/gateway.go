@@ -19,12 +19,14 @@ import (
 
 // Config holds the runtime configuration for KrakenD config generation.
 type Config struct {
-	HTTPProtocol    string
-	BaseDomain      string
-	OIDCSubdomain   string
-	APIRoute        string
-	LogtoResourceID string
-	ConfigPath      string // path to krakend.json
+	HTTPProtocol  string
+	BaseDomain    string
+	OIDCSubdomain string
+	APIRoute      string
+	// Audience is the expected JWT `aud` — the Zitadel project id (tokens for the
+	// Infra API project carry it). Read from /run/infra/zitadel-platform.json.
+	Audience   string
+	ConfigPath string // path to krakend.json
 
 	// CORSAllowOrigins are the browser origins allowed to call the gateway (the
 	// admin SPA lives on a different subdomain than the API). Empty disables CORS.
@@ -277,14 +279,17 @@ func (g *Generator) buildEndpoint(method, gatewayPath, backendPath, host string,
 		return ep
 	}
 
-	jwkURL := fmt.Sprintf("%s://%s.%s/oidc/jwks",
+	// Zitadel publishes its JWKS at /oauth/v2/keys and signs with RS256.
+	jwkURL := fmt.Sprintf("%s://%s.%s/oauth/v2/keys",
 		g.cfg.HTTPProtocol, g.cfg.OIDCSubdomain, g.cfg.BaseDomain)
 
 	validator := map[string]interface{}{
-		"alg":                  "ES384",
+		"alg":                  "RS256",
 		"jwk_url":              jwkURL,
 		"disable_jwk_security": g.cfg.HTTPProtocol == "http",
-		"audience":             []string{g.cfg.LogtoResourceID},
+		"audience":             []string{g.cfg.Audience},
+		// roles/organization_id are flat claims emitted by a Zitadel Action (the raw
+		// project-roles claim is an object KrakenD can't read as a role array).
 		"propagate_claims": [][]string{
 			{"sub", "x-user-id"},
 			{"roles", "x-user-roles"},
