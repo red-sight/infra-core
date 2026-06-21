@@ -1,0 +1,42 @@
+# Zitadel declarative bootstrap config (replaces logto.config.yaml).
+# init.js reads this on every start and applies it idempotently.
+# Dynamic redirect/origin URIs are derived in init.js from env, not declared here.
+
+# One shared project defines the API audience and the roles asserted into tokens.
+project:
+  name: Infra API
+  # Roles that appear in JWTs (registrator maps endpoint scopes -> these in Phase 4).
+  roles:
+    - key: admin
+      displayName: Platform administrator
+      group: platform
+    - key: org_owner
+      displayName: Organization owner
+      group: org
+    - key: org_user
+      displayName: Organization member
+      group: org
+
+# Shared OIDC SPA clients. Per-organization redirect URIs / additional origins are
+# appended at runtime by service-core when an org is created (Phase 3) — like the old
+# shared Logto Tenant app. Base/local URIs are seeded here.
+apps:
+  - key: admin            # written to /run/infra/admin-app.json
+    name: Admin
+    origins:
+      - admin             # <proto>://<admin-subdomain>.<base>
+      - "http://localhost:5173"
+  - key: tenant           # written to /run/infra/tenant-app.json
+    name: Tenant
+    origins:
+      - "http://localhost:5174"
+
+# Machine (service-account) users for backend services that call the Management API.
+# Each gets a PAT written to /run/infra/<file> (mirrors the old M2M credential files).
+machines:
+  - userName: registrator
+    name: Registrator
+    file: registrator-m2m.json
+  - userName: service-core
+    name: Service Core
+    file: service-core-m2m.json

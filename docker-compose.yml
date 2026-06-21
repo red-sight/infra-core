@@ -8,6 +8,7 @@ volumes:
   postgres_data:
   redis_data:
   infra_init_data:
+  zitadel_machinekey:
 
 services:
   traefik:
@@ -18,7 +19,6 @@ services:
         aliases:
           - ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
           - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-          - ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
           - ${INFRA_ADMIN_SUBDOMAIN:-admin}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
     ports:
       - "80:80"
@@ -77,51 +77,123 @@ services:
       timeout: 5s
       retries: 3
 
-  logto:
-    image: svhd/logto:latest
+  # Zitadel — the identity provider (replaces Logto). One instance, one issuer
+  # (RS256); per-organization isolation, branding and OIDC apps live inside it.
+  # Reachability is via Traefik at auth.<base>; the container always listens on
+  # :8080 (ExternalPort only shapes the issuer URL).
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.15.2
     restart: unless-stopped
+    # start-from-init runs init + setup + start in one container (idempotent on an
+    # existing DB). --tlsMode disabled = serve plain HTTP (dev); swarm overrides to
+    # external (TLS terminated at Traefik).
+    command: ["start-from-init", "--masterkeyFromEnv", "--tlsMode", "disabled"]
     networks:
       - infra
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zitadel-prepare:
+        condition: service_completed_successfully
     environment:
-      DB_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_LOGTO_DB:-logto}
-      PORT: 3001
-      ADMIN_PORT: 3002
-      ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      TRUST_PROXY_HEADER: "1"
-    entrypoint: ["sh", "-c", "npx @logto/cli db seed --db-url $$DB_URL 2>/dev/null; npx @logto/cli db alteration deploy latest --db-url $$DB_URL 2>/dev/null; npm start"]
+      ZITADEL_MASTERKEY: ${INFRA_ZITADEL_MASTERKEY:?INFRA_ZITADEL_MASTERKEY is required (exactly 32 chars)}
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_EXTERNALDOMAIN: ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      ZITADEL_EXTERNALPORT: "80"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: ${INFRA_PG_ZITADEL_DB:-zitadel}
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: ${INFRA_PG_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${INFRA_PG_PASSWORD:-postgres}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${INFRA_PG_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${INFRA_PG_PASSWORD:-postgres}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # Bootstrap a machine (service-account) user + PAT to the shared volume, read
+      # by zitadel-init to provision the instance (mirrors the old M2M file pattern).
+      ZITADEL_FIRSTINSTANCE_PATPATH: /machinekey/admin-sa.pat
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: admin-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Admin SA
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2030-01-01T00:00:00Z"
+      # Human admin for the Zitadel console (login at auth.<base>/ui/console).
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${INFRA_ZITADEL_ADMIN_USERNAME:-admin}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${INFRA_ZITADEL_ADMIN_PASSWORD:?INFRA_ZITADEL_ADMIN_PASSWORD is required}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+    volumes:
+      - zitadel_machinekey:/machinekey
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/status || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
       start_period: 30s
     labels:
       traefik.enable: "true"
-      traefik.http.routers.logto.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
-      traefik.http.routers.logto.service: "logto"
-      traefik.http.services.logto.loadbalancer.server.port: "3001"
-      traefik.http.routers.logto-admin.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
-      traefik.http.routers.logto-admin.service: "logto-admin"
-      traefik.http.services.logto-admin.loadbalancer.server.port: "3002"
+      traefik.http.routers.zitadel.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`)"
+      traefik.http.routers.zitadel.service: "zitadel"
+      # Plain HTTP backend: our clients use Zitadel's REST/OIDC endpoints (HTTP/1.1),
+      # and the console uses gRPC-web — neither needs native gRPC, so no h2c. h2c made
+      # Traefik rewrite the HTTP/2 :authority to the backend IP, breaking Zitadel's
+      # host-based instance detection (404). Keeping HTTP/1.1 preserves the Host header.
+      traefik.http.services.zitadel.loadbalancer.server.port: "8080"
 
-  logto-init:
-    build: ./scripts/logto
+  # Zitadel runs as a non-root user and cannot write to a freshly-created named
+  # volume (root-owned mountpoint). Make the machinekey dir writable before start
+  # so FirstInstance can drop the PAT there. Dev convenience; prod uses secrets.
+  zitadel-prepare:
+    image: alpine:3
+    command: ["sh", "-c", "mkdir -p /machinekey && chmod 0777 /machinekey"]
+    volumes:
+      - zitadel_machinekey:/machinekey
+
+  # One-shot bootstrap: reads the admin-sa PAT, then provisions the instance
+  # (project, roles, default org, OIDC apps, machine creds, HTTP email provider,
+  # branding) idempotently. Implemented in scripts/zitadel (Phase 2).
+  zitadel-init:
+    build: ./scripts/zitadel
     networks:
       - infra
     volumes:
+      - zitadel_machinekey:/machinekey:ro
       - infra_init_data:/run/infra
     environment:
-      LOGTO_ADMIN_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}-admin.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      DB_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_LOGTO_DB:-logto}
-      ADMIN_USERNAME: ${INFRA_LOGTO_ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${INFRA_LOGTO_ADMIN_PASSWORD:?INFRA_LOGTO_ADMIN_PASSWORD is required}
-      API_RESOURCE_INDICATOR: ${INFRA_LOGTO_API_RESOURCE_ID:?INFRA_LOGTO_API_RESOURCE_ID is required}
+      # Reach Zitadel by its issuer host (via the Traefik network alias) so the Host
+      # header matches the instance domain — calling http://zitadel:8080 directly
+      # sends Host "zitadel:8080" and Zitadel returns 404 (no such instance).
+      ZITADEL_API_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      ZITADEL_PAT_FILE: /machinekey/admin-sa.pat
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_ADMIN_SUBDOMAIN: ${INFRA_ADMIN_SUBDOMAIN:-admin}
     restart: on-failure
+
+  # Zitadel Login UI v2 — the hosted login is a separate app in Zitadel v4. The core
+  # only redirects OIDC auth to /ui/v2/login; this container serves it. Runs as the
+  # login-client service user (IAM_LOGIN_CLIENT) whose PAT zitadel-init writes.
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:v4.15.2
+    restart: unless-stopped
+    networks:
+      - infra
+    depends_on:
+      zitadel:
+        condition: service_healthy
+      zitadel-init:
+        condition: service_completed_successfully
+    volumes:
+      - infra_init_data:/run/infra:ro
+    environment:
+      # Reach the core by its issuer host (via the Traefik alias) so the Host header
+      # matches the instance — calling http://zitadel:8080 directly would 404.
+      ZITADEL_API_URL: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /run/infra/login-client.pat
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.zitadel-login.rule: "Host(`${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}`) && PathPrefix(`/ui/v2/login`)"
+      # Higher priority than the catch-all zitadel router so the login path wins.
+      traefik.http.routers.zitadel-login.priority: "100"
+      traefik.http.services.zitadel-login.loadbalancer.server.port: "3000"
 
   nats:
     image: nats:2.10-alpine
@@ -156,9 +228,9 @@ services:
       # OIDC redirect-URI registration.
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      # Master organization (apex-domain org for the product owner) — seeded on
+      # Default (apex-domain) organization for the non-SaaS case — seeded on
       # startup if absent.
-      INFRA_MASTER_ORG_NAME: ${INFRA_MASTER_ORG_NAME:-Master}
+      INFRA_DEFAULT_ORG_NAME: ${INFRA_DEFAULT_ORG_NAME:-Master}
       OUTBOX_POLL_INTERVAL: ${INFRA_CORE_OUTBOX_POLL_INTERVAL:-2s}
       OUTBOX_MAX_ATTEMPTS: ${INFRA_CORE_OUTBOX_MAX_ATTEMPTS:-10}
     healthcheck:
@@ -243,11 +315,12 @@ services:
       INFRA_HTTP_OIDC_SUBDOMAIN: ${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}
       INFRA_ADMIN_SUBDOMAIN: ${INFRA_ADMIN_SUBDOMAIN:-admin}
       INFRA_API_ROUTE: ${INFRA_API_ROUTE:-api}
-      INFRA_LOGTO_API_RESOURCE_ID: ${INFRA_LOGTO_API_RESOURCE_ID}
+      # JWT audience = the Zitadel project id; read from the descriptor zitadel-init
+      # writes to /run/infra. Override the scope→role policy with INFRA_GATEWAY_ROLE_SCOPES.
+      INFRA_ZITADEL_PLATFORM_FILE: /run/infra/zitadel-platform.json
       # Optional: comma-separated extra browser origins allowed to call the gateway
       # (defaults to the admin SPA origin derived above). E.g. a local Vite dev server.
       INFRA_CORS_ALLOW_ORIGINS: ${INFRA_CORS_ALLOW_ORIGINS:-}
-      INFRA_LOGTO_ENDPOINT: ${INFRA_HTTP_PROTOCOL:-http}://${INFRA_HTTP_OIDC_SUBDOMAIN:-auth}.${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_REGISTRATOR_RELOAD_DELAY: ${INFRA_REGISTRATOR_RELOAD_DELAY:-5s}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]

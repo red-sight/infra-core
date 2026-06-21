@@ -9,3 +9,5 @@ node_modules
 # KrakenD: krakend.json is generated (dev: registrator; swarm: config object).
 # Only the committed krakend.bootstrap.json is tracked.
 config/krakend/krakend.json
+# Playwright MCP artifacts
+.playwright-mcp/

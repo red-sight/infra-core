@@ -21,17 +21,14 @@ services:
     ports:
       - "6379:6379"
 
-  logto:
+  zitadel:
+    # Expose the container port directly for debugging (Traefik also routes auth.<base>).
     ports:
-      - "3001:3001"
-      - "3002:3002"
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - "8088:8080"
 
-  logto-init:
+  zitadel-init:
     depends_on:
-      logto:
+      zitadel:
         condition: service_healthy
 
   krakend:
@@ -46,7 +43,7 @@ services:
       - -c
       - test -f /etc/krakend/krakend.json || cp /etc/krakend/krakend.bootstrap.json /etc/krakend/krakend.json; exec krakend run -c /etc/krakend/krakend.json
     depends_on:
-      logto:
+      zitadel:
         condition: service_healthy
 
   nats:
@@ -90,6 +87,8 @@ services:
     depends_on:
       krakend:
         condition: service_healthy
+      zitadel-init:
+        condition: service_completed_successfully
 
   swagger:
     depends_on:
@@ -110,7 +109,7 @@ services:
     labels:
       traefik.http.services.admin.loadbalancer.server.port: "5173"
     depends_on:
-      logto-init:
+      zitadel-init:
         condition: service_completed_successfully
 
   tenant-web:
@@ -127,5 +126,5 @@ services:
     labels:
       traefik.http.services.tenant.loadbalancer.server.port: "5174"
     depends_on:
-      logto-init:
+      zitadel-init:
         condition: service_completed_successfully
