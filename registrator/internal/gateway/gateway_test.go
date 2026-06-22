@@ -69,7 +69,7 @@ func TestResolveRoles(t *testing.T) {
 			name:       "scopes required but mapping unavailable fails closed",
 			scopes:     []string{"read:orgs"},
 			matcher:    "any",
-			scopeRoles: nil, // Logto not ready
+			scopeRoles: nil, // roles mapping not ready
 			want:       []string{denyAllRole},
 		},
 		{

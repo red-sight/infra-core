@@ -6,7 +6,7 @@ Read this before working on anything in this repository.
 
 A self-assembling Docker infrastructure suite. Candidate microservices join by adding Docker labels and a healthcheck — Infra discovers them, reads their OpenAPI docs, and registers their endpoints with the API gateway automatically. No manual gateway config.
 
-Core components: Traefik (routing), Logto (OIDC), KrakenD (API gateway), Postgres, Redis, the Registrator (the custom Go service that wires everything together), and logto-init (a one-shot Node.js init container).
+Core components: Traefik (routing), Zitadel (OIDC identity provider) + its Login UI v2 container, KrakenD (API gateway), Postgres, Redis, the Registrator (the custom Go service that wires everything together), and zitadel-init (a one-shot Node.js init container).
 
 ## Documentation
 
@@ -52,30 +52,32 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 
 **KrakenD has no OIDC auto-discovery.** The JWKS URL must be explicit. The Registrator derives it from `INFRA_HTTP_OIDC_SUBDOMAIN` + `INFRA_HTTP_BASE_DOMAIN` + `/oidc/jwks`.
 
-**KrakenD uses `alg: ES384`.** Logto signs tokens with EC P-384. Do not use RS256 — it will reject all tokens.
+**KrakenD uses `alg: RS256`.** Zitadel signs tokens with RS256 and publishes its JWKS at `/oauth/v2/keys` (derived from `INFRA_HTTP_OIDC_SUBDOMAIN` + `INFRA_HTTP_BASE_DOMAIN`). The Registrator sets these on the JWT validator.
 
 **`disable_jwk_security`** must be `true` for local HTTP, `false` for prod HTTPS. The Registrator sets this based on `INFRA_HTTP_PROTOCOL`.
 
-**Logto API Resource is required.** Without a configured API Resource in Logto, issued JWTs have no `aud` claim and KrakenD rejects every token. This is created by `logto-init` via `logto.config.yaml`.
+**JWT audience = the Zitadel project id.** Tokens must carry the "Infra API" project id in `aud` or KrakenD rejects them. The SPA requests it via the scope `urn:zitadel:iam:org:project:id:<projectId>:aud`; the Registrator reads the project id from `/run/infra/zitadel-platform.json` and sets it as the validator audience.
 
-**All initial Logto config via `scripts/logto/init.js`.** Never configure Logto manually via the admin UI for anything declared in `logto.config.yaml` — `logto-init` runs on every `compose up` and will overwrite manual changes. Runtime changes to things not covered by the config file may use the Management API directly.
+**All initial Zitadel config via `scripts/zitadel/init.js`.** Never configure Zitadel manually via the console for anything the bootstrap manages (project/roles/apps/machine users/flatten action/admin role) — `zitadel-init` runs on every `compose up` and reconciles idempotently. Structural declarations (project, roles, app keys, machine users) live in `scripts/zitadel/zitadel.config.yaml`. Runtime changes not covered by the bootstrap may use the Management API directly.
 
-**`infra_init_data` volume.** Shared between `logto-init`, `registrator`, `service-core`, `admin` and `tenant-web`. `logto-init` writes M2M credentials to `/run/infra/registrator-m2m.json` (read by the Registrator) and `/run/infra/service-core-m2m.json` (read by service-core), and per-app SPA configs `admin-app.json` / `tenant-app.json` (appId/endpoint/apiResource — read by the respective frontends, and `tenant-app.json` also by service-core to append per-org redirect URIs). In Swarm the M2M readers are pinned to the same node so the volume is local; moving the creds to Docker secrets would remove that pin.
+**Roles reach the access token only with three things set** (all handled by the bootstrap): the OIDC app's `accessTokenRoleAssertion: true` (else roles go only to id_token/userinfo); the SPA requesting `urn:zitadel:iam:org:projects:roles`; and the **flatten Action** (Complement Token flow) that turns Zitadel's object roles claim `urn:zitadel:iam:org:project:<id>:roles` into a flat `roles` array + `organization_id` — KrakenD can't read the object form. The Action's JS function name must equal the action name; grants are read from `ctx.v1.user.grants`.
 
-**`service-core` is the source of truth for organizations; Logto is a follower.** The goal is to manage everything through our own APIs (eventually retiring the Logto console). An organization is created in our Postgres first (authoritative), then provisioned in Logto. Logto still holds the org because membership and the `organization_id` JWT claim depend on it — but core owns it. service-core has a dedicated Logto Management M2M app (`Service Core`, created in `init.js` alongside `m-default`, with the same management access) so its credentials rotate/revoke independently. The provider-neutral link column is `external_id` (not `logto_org_id`) — Logto specifics live behind `internal/logto`, so swapping providers changes only that package, not the schema.
+**`infra_init_data` volume.** Shared between `zitadel-init`, `zitadel-login`, `registrator`, `service-core`, `admin` and `tenant-web`. `zitadel-init` writes machine-user PATs to `/run/infra/registrator-m2m.json` and `/run/infra/service-core-m2m.json` (`{token, apiEndpoint, issuer}`), the Login UI v2 PAT to `login-client.pat` (mode 0644 — the login container is non-root), per-app SPA configs `admin-app.json` / `tenant-app.json` (`{issuer, clientId, projectId, appId, orgId}` — read by the frontends, and `tenant-app.json` also by service-core to append per-org redirect URIs), and `zitadel-platform.json` (`{issuer, projectId, orgId}` — read by the Registrator for the JWT audience). The Zitadel FirstInstance admin PAT (`admin-sa.pat`) is on a separate `zitadel_machinekey` volume. In Swarm the readers are pinned to the same node; moving creds to Docker secrets would remove that pin.
 
-**Core→Logto sync uses a transactional outbox, never periodic reconciliation.** `POST /admin/organizations` writes the org row and an `outbox_events` row in one DB transaction (core is always consistent). A background worker in service-core (`internal/outbox`) delivers pending events to Logto with retries and exponential backoff, idempotently (reconciles by the `coreOrgId` stamped on the Logto org's `customData`), filling `external_id` on success. "Synced" is derived from `external_id IS NOT NULL`; there is no status column on the org. Failed deliveries are visible as `outbox_events.status = 'failed'`. This eliminates drift by design — no diff-and-fix job.
+**`service-core` is the source of truth for organizations; Zitadel is a follower.** The goal is to manage everything through our own APIs. An organization is created in our Postgres first (authoritative), then provisioned in Zitadel (a Zitadel *organization*). Zitadel holds the org because membership and the `organization_id` JWT claim depend on it — but core owns it. service-core uses a dedicated `service-core` machine user (PAT) for the Management API so its credentials rotate independently. The provider-neutral link column is `external_id` — Zitadel specifics live behind `internal/zitadel`, so swapping providers changes only that package, not the schema. (The earlier `internal/logto` predecessor proved this: the swap touched only that package + the contracts held.)
+
+**Core→Zitadel sync uses a transactional outbox, never periodic reconciliation.** `POST /admin/organizations` writes the org row and an `outbox_events` row in one DB transaction (core is always consistent). A background worker in service-core (`internal/outbox`) delivers pending events to Zitadel with retries and exponential backoff, filling `external_id` on success. Provisioning is idempotent via Zitadel's **unique org name** (a re-create 409 adopts the existing org by name) — Zitadel v4 removed the v1 org-metadata endpoints, so there is no coreId stamp. Provisioning also grants the org the shared Infra API **project grant** (org_owner/org_user) so its members can hold roles, and registers the tenant redirect URIs. "Synced" is derived from `external_id IS NOT NULL`. Failed deliveries are visible as `outbox_events.status = 'failed'`.
 
 **Tenant frontends: one shared SPA, subdomain per organization.** Each organization is reached at `<slug>.<base-domain>` (e.g. `acme.app.localhost`), served by a single multi-tenant frontend (`tenant-web`) — not an app per org. Traefik routes the wildcard `HostRegexp(^[a-z0-9-]+\.<base>$)` to it at a lower priority than the exact-host routers (admin/auth/…), and the org `slug` (DNS-safe, validated, reserved-word-checked) is the subdomain label. Before login, `tenant-web` resolves its org via the public `GET /tenant/by-host?host=<hostname>` (unauthenticated, `x-infra-protected: false`) — service-core maps the host to an org — then signs in and requests an organization-scoped token.
 
-**Master organization — the apex-domain tenant.** Exactly one org may have an **empty slug**; it is the *master* organization (the product owner's org, for non-SaaS or owner use), served on the apex domain `<base>` itself rather than a subdomain. `UNIQUE(slug)` guarantees at most one (the single empty-string row). service-core **seeds it on startup** (`organization.EnsureMaster`, name from `INFRA_MASTER_ORG_NAME`, idempotent) via the normal outbox flow, so it is provisioned in Logto with the apex redirect URI (`<proto>://<base>/callback`). Traefik routes the apex `Host(<base>)` to `tenant-web` (low priority, so the `/api`, `/docs`, `/openapi.json` path routers still win). The apex is same-origin with the gateway, so no CORS is needed there. The master org is **not** created through the admin form — it is part of initialization.
+**Master organization — the apex-domain tenant.** Exactly one org may have an **empty slug**; it is the *master* organization (the product owner's org, for non-SaaS or owner use), served on the apex domain `<base>` itself rather than a subdomain. `UNIQUE(slug)` guarantees at most one (the single empty-string row). service-core **seeds it on startup** (`organization.EnsureMaster`, name from `INFRA_DEFAULT_ORG_NAME`, idempotent) via the normal outbox flow, so it is provisioned in Zitadel with the apex redirect URI (`<proto>://<base>/callback`). Traefik routes the apex `Host(<base>)` to `tenant-web` (low priority, so the `/api`, `/docs`, `/openapi.json` path routers still win). The apex is same-origin with the gateway, so no CORS is needed there. The master org is **not** created through the admin form — it is part of initialization.
 
-**One shared Logto `Tenant` SPA application; per-org redirect URIs appended at runtime.** Logto has no wildcard redirect URIs, so on org creation service-core's outbox appends `<proto>://<slug>.<base>/callback` to the shared `Tenant` app (declared in `logto.config.yaml`; its appId is written to `/run/infra/tenant-app.json`, consumed by both `tenant-web` and service-core). Idempotent. **Caveat:** the GET-modify-PATCH of the shared app races under concurrent org creation across replicas — fine single-replica; at scale serialize web-provisioning or move to an app-per-org. Gateway CORS allows the wildcard tenant origin `<proto>://*.<base>` (`allow_credentials: false`, so breadth grants no access — the JWT is still validated).
+**One shared Zitadel `Tenant` SPA application; per-org redirect URIs appended at runtime.** On org creation service-core's outbox appends `<proto>://<slug>.<base>/callback` to the shared `Tenant` app's `redirectUris` and `additionalOrigins` (the app is created by the bootstrap; its clientId/projectId are written to `/run/infra/tenant-app.json`, consumed by both `tenant-web` and service-core). Idempotent (PUT only on a real diff — Zitadel rejects no-op updates with 400 "No changes"). **Caveat:** the GET-modify-PUT of the shared app races under concurrent org creation across replicas — fine single-replica; at scale serialize or move to an app-per-org. `tenant-web` scopes login to its org with `urn:zitadel:iam:org:id:<external_id>` (the org's Zitadel id, returned by `/tenant/by-host`). Gateway CORS allows the wildcard tenant origin `<proto>://*.<base>` (`allow_credentials: false`); browser→Zitadel CORS is covered by the app's `additionalOrigins`.
 
 **Data ownership boundary — the rule for any future identity entity (users, roles, membership).**
-- **Logto owns authentication & authorization**: credentials, login, sessions/MFA, membership-for-auth, org roles/scopes that mint JWT claims. Never duplicate authority for these.
+- **Zitadel owns authentication & authorization**: credentials, login, sessions/MFA, membership-for-auth, project roles/grants that mint JWT claims. Never duplicate authority for these.
 - **Core DB owns domain data & relationships.** For an identity entity we must query/join/reference by FK, keep a *minimal projection* (`external_id` + a few denormalized fields), not a full copy.
-- **One sync direction per concern** — never bidirectional on the same field (avoids split-brain). Domain-owned creation (org) is core→Logto via the outbox; auth facts we only consume (effective roles in the JWT) are read from the token, not stored as authority.
+- **One sync direction per concern** — never bidirectional on the same field (avoids split-brain). Domain-owned creation (org) is core→Zitadel via the outbox; auth facts we only consume (effective roles in the JWT) are read from the token, not stored as authority.
 - **Add a projection only when a concrete need appears** (an FK, a rich query, a domain field), not preemptively. Consequence: users are **not** mirrored yet — nothing in core references a user beyond the propagated `x-user-id`.
 
 ## Service images (pinned)
@@ -83,7 +85,8 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 | Service | Image |
 |---|---|
 | Traefik | `traefik:v3.7` |
-| Logto | `svhd/logto:latest` |
+| Zitadel | `ghcr.io/zitadel/zitadel:v4.15.2` |
+| Zitadel Login UI v2 | `ghcr.io/zitadel/zitadel-login:v4.15.2` |
 | KrakenD | `krakend:latest` |
 | Postgres | `postgres:17-alpine` |
 | Redis | `redis:7-alpine` |
@@ -100,8 +103,8 @@ When suggesting image updates, pin to a specific version. `latest` is acceptable
 | `http://app.localhost/docs` | Swagger UI | 8080 |
 | `http://admin.app.localhost` | admin console (SPA) | 80/5173 |
 | `http://<slug>.app.localhost` | tenant-web (per-org frontend, wildcard) | 80/5174 |
-| `http://auth.app.localhost` | Logto OIDC | 3001 |
-| `http://auth-admin.app.localhost` | Logto admin console | 3002 |
+| `http://auth.app.localhost` | Zitadel (OIDC + console at `/ui/console`) | 8080 |
+| `http://auth.app.localhost/ui/v2/login` | Zitadel Login UI v2 (separate container) | 3000 |
 | `http://traefik.app.localhost` | Traefik dashboard (dev only) | — |
 
 All derived from env vars: `INFRA_HTTP_PROTOCOL`, `INFRA_HTTP_BASE_DOMAIN`, `INFRA_HTTP_OIDC_SUBDOMAIN`, `INFRA_API_ROUTE`.
@@ -116,7 +119,7 @@ Internal packages:
 |---|---|
 | `registrar` | Service discovery, registry state |
 | `gateway` | KrakenD config generation and reload |
-| `logto` | Logto Management API client — fetches scope→role mappings |
+| `roles` | scope→role mapping (gateway authorization policy; built-in default, env-overridable) |
 | `openapi` | Spec fetching, aggregation, Swagger hosting |
 
 Quick reference — candidate service labels:
@@ -134,7 +137,7 @@ OpenAPI operation extensions:
 | Extension | Default | Description |
 |---|---|---|
 | `x-infra-protected` | inherits `infra.auth.protected` | override auth per operation |
-| `x-infra-scopes` | `[]` | required scopes; Registrator resolves these to roles via Logto and writes them to KrakenD `roles` |
+| `x-infra-scopes` | `[]` | required scopes; Registrator resolves these to roles via its `roles` policy (default mirrors the project roles; override with `INFRA_GATEWAY_ROLE_SCOPES`) and writes them to KrakenD `roles` |
 | `x-infra-scopes-matcher` | `"any"` | `"any"` (OR) — roles holding at least one listed scope; `"all"` (AND) — roles holding every listed scope |
 
 Claim propagation to backends:
@@ -165,5 +168,6 @@ In Swarm, Postgres is pinned to a labeled node (`node.labels.infra.postgres == t
 ## Open / unresolved
 
 - **LocalAdapter (no-Docker dev mode):** `LocalAdapter` for `EnvironmentAdapter` with REST-based registration and heartbeat TTL. Deferred post-MVP.
-- **Swarm prod TLS and secrets still manual:** the registrator side is built and the stack is wired. Registrator: `INFRA_REGISTRATOR_RELOAD_MODE` (auto/artifact), `auto` restart with `krakend check` + atomic promote, `artifact` delivery (render → per-service `info.version` gate → immutable config object `krakend-config-<hash>` → `UpdateServiceConfig`), `-once`/`-dry-run`. Verified incl. live single-node swarm tests. Stack (`docker-compose.swarm.yml`): one-shot `logto-init` (restart `none`), all build-only services given images, `service-core`/`admin`/`nats` added, resource limits, `order:start-first`, and KrakenD config delivery as a config object — KrakenD boots on the `krakend_bootstrap` config object (the `./config/krakend` bind is now dev-only, moved to the override), then the registrator rolls it onto generated objects. **Remaining (need real infra/decisions):** TLS on :443 (ACME resolver + domain + persisted storage; documented in the swarm file header), Docker secrets for PG/Logto passwords (`*_FILE` convention), and the CI scripting (`stack deploy --detach=false` convergence wait → `registrator -once`; multi-repo CI-to-CI trigger). The M2M file stays on the `infra_init_data` volume, so `logto-init` and `registrator` are pinned to the same (manager) node.
-- **`depends_on` gap:** `logto-init` does not declare `depends_on: logto` — startup ordering relies on `restart: on-failure` retries. Known issue; on a cold start `logto-init` will retry several times before Logto is ready.
+- **Swarm prod TLS and secrets still manual:** the registrator side is built and the stack is wired. Registrator: `INFRA_REGISTRATOR_RELOAD_MODE` (auto/artifact), `auto` restart with `krakend check` + atomic promote, `artifact` delivery (render → per-service `info.version` gate → immutable config object `krakend-config-<hash>` → `UpdateServiceConfig`), `-once`/`-dry-run`. Verified incl. live single-node swarm tests. Stack (`docker-compose.swarm.yml`): one-shot `zitadel-init`/`zitadel-prepare` (restart `none`), `zitadel`/`zitadel-login` with images + resource limits, all build-only services given images, `order:start-first`, and KrakenD config delivery as a config object — KrakenD boots on the `krakend_bootstrap` config object (the `./config/krakend` bind is dev-only, in the override), then the registrator rolls it onto generated objects. **Remaining (need real infra/decisions):** TLS on :443 (ACME resolver + domain + persisted storage; documented in the swarm file header), Docker secrets for PG password / Zitadel masterkey + admin password (`*_FILE`), and the CI scripting (`stack deploy --detach=false` → `registrator -once`; multi-repo CI-to-CI trigger). The creds files stay on `infra_init_data`, so `zitadel-init`, `zitadel-login`, `registrator` and `service-core` are pinned to the same (manager) node.
+- **Owner flow (credential delivery) is pending a mail-service.** Creating an org owner = create a Zitadel user in the org + grant `org_owner` + invite. The invitation/credential delivery needs a mail-service (HTTP email provider → our relay; Zitadel's `Executions.DenyList` must allow that internal host). Not built yet.
+- **`startup ordering`:** `zitadel-init` waits for Zitadel readiness in-script (polls discovery) and uses `restart: on-failure`; `zitadel-login` and the frontends `depends_on: zitadel-init` completing.

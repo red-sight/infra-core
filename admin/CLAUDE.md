@@ -2,8 +2,8 @@
 
 ## Stack
 
-Vue 3 + Vite + TypeScript. `@logto/vue` for auth, `@tanstack/vue-query` for data
-fetching, Vue Router for routing.
+Vue 3 + Vite + TypeScript. `oidc-client-ts` for auth (Zitadel OIDC), wrapped in the
+`useAuth` composable; `@tanstack/vue-query` for data fetching, Vue Router for routing.
 
 The UI is the **"Helm" design system** — a faithful, hand-authored port of a
 Claude Design export (not shadcn-vue, not a CLI-generated component set). Tokens
@@ -63,7 +63,7 @@ Conventions worth matching when extending:
 
 The app shell (`src/components/shell/`) is Sidebar, TopBar (⌘K command palette
 trigger, theme toggle, notifications), CommandPalette, MobileNav, and UserMenu
-(wired to real Logto identity + signOut). The nav model and screen→path map are
+(wired to real OIDC identity via `useAuth` + signOut). The nav model and screen→path map are
 in `shell/nav.ts`; **route names equal screen ids** so the active link derives
 from the current route.
 
@@ -90,23 +90,23 @@ Use `@tanstack/vue-query` for all real API calls (`useQuery` for reads,
 `import.meta.env.VITE_API_BASE_URL`.
 
 The current screens render **mock data** from `src/lib/data.ts`. When wiring live
-data, replace those arrays with service-core / Logto queries — the screens depend
-only on the shapes exported there.
+data, replace those arrays with service-core queries (via `useApi`) — the screens
+depend only on the shapes exported there.
 
 ## Auth
 
-Use `useLogto()` for auth state and operations. `AppLayout` handles the auth
-guard — it redirects to Logto sign-in when `isAuthenticated` is false. Do not add
-auth checks elsewhere.
+Use `useAuth()` (`src/composables/useAuth.ts`, backed by oidc-client-ts) for auth
+state and operations. `AppLayout` handles the auth guard — it redirects to the
+Zitadel sign-in when `isAuthenticated` is false. Do not add auth checks elsewhere.
 
 ```ts
-const { getAccessToken } = useLogto()
-const token = await getAccessToken(import.meta.env.VITE_LOGTO_API_RESOURCE)
+const { getAccessToken } = useAuth()
+const token = await getAccessToken() // audience is fixed via the OIDC scope
 ```
 
-Runtime Logto config (appId, endpoint, apiResource) is loaded by the Docker
-entrypoint from `/run/infra/admin-app.json` (written by logto-init) into `VITE_*`
-vars; see `src/config.ts`.
+Runtime OIDC config (issuer, clientId, projectId) is loaded by the Docker entrypoint
+from `/run/infra/admin-app.json` (written by zitadel-init) into `VITE_OIDC_*` vars;
+see `src/config.ts`.
 
 ## File structure
 

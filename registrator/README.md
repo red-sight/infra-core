@@ -8,7 +8,7 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 |---|---|
 | `registrar` | Service discovery, registry state |
 | `gateway` | KrakenD config generation and reload |
-| `logto` | Logto Management API client — fetches scope→role mappings |
+| `roles` | scope→role mapping policy (built-in default, env-overridable) |
 | `openapi` | Spec fetching, aggregation, Swagger hosting |
 
 ## Environment variables
@@ -21,7 +21,8 @@ The Go service that wires Infra together. It watches Docker for healthy API serv
 | `INFRA_HTTP_BASE_DOMAIN` | `app.localhost` | base domain |
 | `INFRA_HTTP_OIDC_SUBDOMAIN` | `auth` | OIDC subdomain prefix |
 | `INFRA_API_ROUTE` | `api` | API gateway path prefix |
-| `INFRA_LOGTO_API_RESOURCE_ID` | — | Logto API Resource indicator (required) |
+| `INFRA_ZITADEL_PLATFORM_FILE` | `/run/infra/zitadel-platform.json` | descriptor written by zitadel-init; the Registrator reads the project id from it for the JWT audience |
+| `INFRA_GATEWAY_ROLE_SCOPES` | built-in | optional JSON `{role:[scope,…]}` overriding the default scope→role policy |
 | `INFRA_REGISTRATOR_RELOAD_DELAY` | `5s` | debounce delay before KrakenD reload |
 | `INFRA_REGISTRATOR_RECONCILE_INTERVAL` | `30s` | reconcile loop interval — re-scans all healthy labeled containers and re-registers any that were falsely removed due to stale Docker events |
 | `INFRA_KRAKEND_CONFIG_PATH` | `/etc/krakend/krakend.json` | path to the KrakenD config file (inside the registrator container) |
@@ -81,7 +82,7 @@ Subscribes to Docker `service` task events. Emits a `ServiceEvent` when a task t
 A pass runs on each debounce fire (after `INFRA_REGISTRATOR_RELOAD_DELAY`), on the poll tick, and once per `-once` invocation. The two modes share spec fetching and scope→role resolution but diverge entirely at delivery, so each is its own runner (passes are serialized by a mutex).
 
 **`auto` (dev):**
-1. Fetch each service's OpenAPI spec; query Logto for scope→role mappings.
+1. Fetch each service's OpenAPI spec; build the scope→role map from the `roles` policy.
 2. Generate the new `krakend.json` and, unless `INFRA_REGISTRATOR_VALIDATE=false`, validate it with `krakend check` in a one-shot `krakend-check` container before promoting it: the candidate is written to a temp file in the config dir, validated there, and atomically renamed into place only if valid (and only if the render changed). An invalid candidate is discarded — the live config and KrakenD are untouched. The `krakend-check` container is removed on success, left for inspection on failure.
 3. Restart the local KrakenD container so it re-reads the config. Cheap with no prod traffic.
 
@@ -95,13 +96,13 @@ A pass runs on each debounce fire (after `INFRA_REGISTRATOR_RELOAD_DELAY`), on t
 
 ## RBAC — scope→role resolution
 
-Before generating each KrakenD config, the Registrator queries the Logto Management API via the `logto` package to build a scope→role map. Both user roles and organization roles are fetched and merged into a single map.
+Before generating each KrakenD config, the Registrator builds a scope→role map from the `roles` package. Unlike the former Logto setup (which fetched scopes-on-roles from the IdP), Zitadel project roles carry no scopes, so "which roles satisfy which scope" is gateway authorization policy: a built-in default (mirroring the project roles), overridable with `INFRA_GATEWAY_ROLE_SCOPES` (JSON `{role:[scope,…]}`).
 
-When an OpenAPI operation declares `x-infra-scopes: [read:items, write:items]`, the Registrator resolves which roles hold those scopes and writes the resulting role list into the KrakenD `auth/validator` `roles` field. KrakenD then validates the flat `roles` claim in the JWT against that list.
+When an OpenAPI operation declares `x-infra-scopes: [read:items, write:items]`, the Registrator resolves which roles hold those scopes and writes the resulting role list into the KrakenD `auth/validator` `roles` field. KrakenD then validates the flat `roles` claim in the JWT against that list (the flat claim is produced by a Zitadel Action — see AGENTS.md).
 
 This means:
 - API specs declare intent (required scopes).
-- Role assignments live in Logto (`logto.config.yaml` / Management API).
+- Role *membership* lives in Zitadel (project roles + grants); the scope→role *policy* lives in the gateway (`roles` package).
 - KrakenD enforces a flat role list — it never sees scope names.
 
 ## KrakenD config generation
@@ -125,10 +126,10 @@ Applied to every protected endpoint, derived from env:
 
 | KrakenD field | Value |
 |---|---|
-| `alg` | `ES384` (Logto signs with EC P-384) |
-| `jwk_url` | `{INFRA_HTTP_PROTOCOL}://{INFRA_HTTP_OIDC_SUBDOMAIN}.{INFRA_HTTP_BASE_DOMAIN}/oidc/jwks` |
+| `alg` | `RS256` (Zitadel signs with RS256) |
+| `jwk_url` | `{INFRA_HTTP_PROTOCOL}://{INFRA_HTTP_OIDC_SUBDOMAIN}.{INFRA_HTTP_BASE_DOMAIN}/oauth/v2/keys` |
 | `disable_jwk_security` | `true` if `INFRA_HTTP_PROTOCOL=http`, else `false` |
-| `audience` | `INFRA_LOGTO_API_RESOURCE_ID` |
+| `audience` | the Zitadel project id (read from `/run/infra/zitadel-platform.json`) |
 
 ### OpenAPI extension labels
 
@@ -137,7 +138,7 @@ Declared per-operation in the service's OpenAPI spec:
 | Extension | Type | Default | Description |
 |---|---|---|---|
 | `x-infra-protected` | `bool` | inherits `infra.auth.protected` Docker label | `false` = public endpoint, no `auth/validator` block generated |
-| `x-infra-scopes` | `string[]` | — | required scopes; Registrator resolves these to roles via Logto and sets them in KrakenD `roles` |
+| `x-infra-scopes` | `string[]` | — | required scopes; Registrator resolves these to roles via the `roles` policy and sets them in KrakenD `roles` |
 | `x-infra-scopes-matcher` | `"all"\|"any"` | `"any"` | scope matching logic used when resolving which roles qualify — `"any"` (OR) means roles that hold at least one listed scope; `"all"` (AND) means roles that hold every listed scope |
 
 A protected endpoint with no scopes declared (`x-infra-protected: true`, no `x-infra-scopes`) accepts any valid JWT.
@@ -189,7 +190,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT (Logto)
+      bearerFormat: JWT (Zitadel)
 paths:
   /api/service-a/v1/items:
     post:
@@ -223,4 +224,4 @@ A microservice joins Infra by:
 
 - **LocalAdapter (no-Docker dev mode):** `LocalAdapter` implementing `EnvironmentAdapter`, accepting REST registrations with heartbeat TTL. Deferred post-MVP.
 - **KrakenD zero-downtime in Swarm:** two replicas + blue/green via Traefik. Out of scope for MVP; single replica with `start-first` is sufficient.
-- **`depends_on` gap:** `logto-init` does not declare `depends_on: logto` — startup ordering relies on `restart: on-failure` retries. This is intentional for now but means init may attempt Logto's API before it is ready and will need several retries on a cold start.
+- **Startup ordering:** `zitadel-init` polls Zitadel readiness in-script and uses `restart: on-failure`; the frontends and `zitadel-login` wait on `zitadel-init` completing.
