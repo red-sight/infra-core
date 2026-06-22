@@ -372,10 +372,11 @@ type getByHostInput struct {
 
 type tenantOutput struct {
 	Body struct {
-		ID       string `json:"id"        doc:"Internal organization ID"`
-		Slug     string `json:"slug"      doc:"Tenant slug (empty for the master organization)"`
-		Name     string `json:"name"      doc:"Organization name"`
-		IsMaster bool   `json:"is_master" doc:"True if this is the master organization (apex domain)"`
+		ID         string `json:"id"          doc:"Internal organization ID"`
+		ExternalID string `json:"external_id" doc:"Identity-provider organization ID (Zitadel); empty until synced. Used by the tenant frontend to scope login to this organization."`
+		Slug       string `json:"slug"        doc:"Tenant slug (empty for the master organization)"`
+		Name       string `json:"name"        doc:"Organization name"`
+		IsMaster   bool   `json:"is_master"   doc:"True if this is the master organization (apex domain)"`
 	}
 }
 
@@ -413,6 +414,9 @@ func (h *handler) getByHost(ctx context.Context, input *getByHostInput) (*tenant
 
 	out := &tenantOutput{}
 	out.Body.ID = org.ID
+	if org.ExternalID != nil {
+		out.Body.ExternalID = *org.ExternalID
+	}
 	out.Body.Slug = org.Slug
 	out.Body.Name = org.Name
 	out.Body.IsMaster = org.Slug == ""

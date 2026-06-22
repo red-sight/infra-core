@@ -188,6 +188,28 @@ back to in this build, and there is no instance feature flag to revert). Added t
 Verified end-to-end with a real browser (Playwright): loginname → password → OIDC callback →
 authenticated Management Console. This same Login v2 flow is what the app SPAs use in Phase 5.
 
+### Phase 5 addendum — frontends on OIDC (verified live)
+
+Both SPAs moved from `@logto/vue` to **oidc-client-ts** (Auth Code + PKCE).
+- **admin** (`useAuth` composable): login verified end-to-end via a real browser —
+  admin.app.localhost → Login v2 → authenticated SPA. The interactive access token
+  carries the **flat `roles` + `organization_id`** (closing the Phase 4 gap), and a live
+  call through KrakenD returns 200 with data (RS256 + audience + admin role check +
+  propagation), while no token → 401.
+- **tenant-web**: resolves its org by host (`/tenant/by-host`, now returns `external_id`),
+  then builds an **org-scoped** OIDC request (`urn:zitadel:iam:org:id:<external_id>`).
+  Verified: granttest.app.localhost → Login v2 with `organization=<granttest id>`. The full
+  member→token path needs a tenant member (owner flow, pending).
+
+Things that had to be set for roles to reach the **access token** (all in the bootstrap):
+1. OIDC app `accessTokenRoleAssertion: true` (+ `idTokenRoleAssertion`) — otherwise roles go
+   only to id_token/userinfo, never the access token KrakenD reads.
+2. The SPA must request scope `urn:zitadel:iam:org:projects:roles` (and the project-aud scope).
+3. The flatten **Action**: the JS function name must equal the action name; the grants API is
+   `ctx.v1.user.grants` (`{count, grants:[{roles, projectId, userResourceOwner}]}`), and the
+   org id comes from the grant's `userResourceOwner` (`ctx.v1.org` is empty in this flow).
+4. The platform admin needs an `admin` project-role grant to actually use the admin API.
+
 ### Phase 4 addendum — gateway + flatten action (verified live, except interactive e2e)
 
 - Registrator is **decoupled from the IdP API**: it no longer fetches scope→role from

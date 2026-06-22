@@ -255,7 +255,7 @@ async function ensureFlattenAction(orgId) {
       await api('PUT', `/management/v1/actions/${actionId}`, body, { orgId });
       console.log(`Action ${name} (${actionId}) updated.`);
     } catch (e) {
-      if (!String(e.message).includes('No Changes')) throw e;
+      if (!String(e.message).toLowerCase().includes('no changes')) throw e;
       console.log(`Action ${name} (${actionId}) unchanged.`);
     }
   }
@@ -265,7 +265,7 @@ async function ensureFlattenAction(orgId) {
     try {
       await api('POST', `/management/v1/flows/2/trigger/${trigger}`, { actionIds: [actionId] }, { orgId });
     } catch (e) {
-      if (!String(e.message).includes('No Changes')) throw e;
+      if (!String(e.message).toLowerCase().includes('no changes')) throw e;
     }
   }
   console.log('Flatten action wired to Complement Token triggers.');

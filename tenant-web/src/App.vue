@@ -1,28 +1,45 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { useLogto } from '@logto/vue'
+import { onMounted, ref } from 'vue'
+import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
 import { config } from './config'
 
-type Tenant = { id: string; slug: string; name: string; is_master: boolean }
+type Tenant = { id: string; external_id: string; slug: string; name: string; is_master: boolean }
 type Status = 'loading' | 'unknown' | 'error' | 'ready'
-
-const logto = useLogto()
-const { isAuthenticated, isLoading, signIn, signOut, fetchUserInfo, getOrganizationToken } = logto
-// handleSignInCallback exists at runtime but isn't in the typed surface of useLogto.
-const handleSignInCallback = (
-  logto as unknown as { handleSignInCallback: (url: string) => Promise<void> }
-).handleSignInCallback
 
 const status = ref<Status>('loading')
 const tenant = ref<Tenant | null>(null)
 const errorMsg = ref('')
 const userName = ref('')
+const isAuthenticated = ref(false)
 const orgToken = ref<'idle' | 'ok' | 'denied'>('idle')
 
-// The backend maps this host to an org: the apex domain → master organization,
-// "<slug>.<base>" → that slug.
 const host = location.host
-const redirectUri = `${location.origin}/callback`
+
+// makeManager builds an org-scoped OIDC client. The org id scope binds login to
+// this organization (and applies its branding); the project-roles + project-aud
+// scopes get the user's roles asserted and set the audience KrakenD validates.
+function makeManager(externalId: string) {
+  const scope = [
+    'openid',
+    'profile',
+    'email',
+    'offline_access',
+    'urn:zitadel:iam:org:projects:roles',
+    `urn:zitadel:iam:org:project:id:${config.projectId}:aud`,
+    `urn:zitadel:iam:org:id:${externalId}`,
+  ].join(' ')
+  return new UserManager({
+    authority: config.issuer,
+    client_id: config.clientId,
+    redirect_uri: `${location.origin}/callback`,
+    post_logout_redirect_uri: location.origin,
+    response_type: 'code',
+    scope,
+    userStore: new WebStorageStateStore({ store: window.localStorage }),
+  })
+}
+
+let manager: UserManager | null = null
 
 async function resolveTenant() {
   try {
@@ -42,42 +59,46 @@ async function resolveTenant() {
   }
 }
 
+// rolesFromToken decodes the access token's flat `roles` claim (set by the Zitadel
+// action). A member of this org has a grant → roles; a non-member has none.
+function rolesFromToken(u: User): string[] {
+  try {
+    const p = JSON.parse(atob(u.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return Array.isArray(p.roles) ? p.roles : []
+  } catch {
+    return []
+  }
+}
+
 onMounted(async () => {
+  // The host identifies the org on both initial load and the OIDC callback.
+  await resolveTenant()
+  if (status.value !== 'ready' || !tenant.value) return
+
+  manager = makeManager(tenant.value.external_id)
+
   if (location.pathname === '/callback') {
     try {
-      await handleSignInCallback(location.href)
+      await manager.signinCallback()
     } catch (e) {
       errorMsg.value = e instanceof Error ? e.message : String(e)
     }
     window.history.replaceState({}, '', '/')
   }
-  await resolveTenant()
+
+  const user = await manager.getUser()
+  if (!user || user.expired) {
+    await manager.signinRedirect()
+    return
+  }
+  isAuthenticated.value = true
+  userName.value =
+    (user.profile.name as string) ?? (user.profile.preferred_username as string) ?? user.profile.sub
+  orgToken.value = rolesFromToken(user).length > 0 ? 'ok' : 'denied'
 })
 
-// Once the tenant is resolved and Logto is ready: sign in if needed, else load
-// the profile and try to acquire an organization-scoped token.
-watch(
-  [isLoading, isAuthenticated, status],
-  async () => {
-    if (isLoading.value || status.value !== 'ready' || !tenant.value) return
-    if (!isAuthenticated.value) {
-      await signIn(redirectUri)
-      return
-    }
-    const info = await fetchUserInfo()
-    userName.value = info?.name ?? info?.username ?? info?.sub ?? 'user'
-    try {
-      const token = await getOrganizationToken(tenant.value.id)
-      orgToken.value = token ? 'ok' : 'denied'
-    } catch {
-      orgToken.value = 'denied'
-    }
-  },
-  { immediate: true },
-)
-
-function logout() {
-  signOut(location.origin)
+async function logout() {
+  await manager?.signoutRedirect()
 }
 </script>
 
