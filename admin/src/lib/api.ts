@@ -1,4 +1,4 @@
-import { useLogto } from '@logto/vue'
+import { useAuth } from '@/composables/useAuth'
 import { config } from '@/config'
 
 // RFC 7807 problem details — what Huma returns on error.
@@ -25,10 +25,10 @@ export class ApiError extends Error {
  * carry the scopes the endpoints require (e.g. write:organizations).
  */
 export function useApi() {
-  const { getAccessToken } = useLogto()
+  const { getAccessToken } = useAuth()
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const token = await getAccessToken(config.logtoApiResource)
+    const token = await getAccessToken()
     const res = await fetch(`${config.apiBaseUrl}${path}`, {
       ...init,
       // Never serve authenticated API data from the browser HTTP cache — the

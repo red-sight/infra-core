@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { useLogto } from '@logto/vue'
+import { useAuth } from '@/composables/useAuth'
 import { useRouter } from 'vue-router'
 import { onMounted, ref } from 'vue'
 
-const { handleSignInCallback } = useLogto()
+const { handleSignInCallback } = useAuth()
 const router = useRouter()
 
 const step = ref('mounted')
@@ -12,7 +12,7 @@ const error = ref<string | null>(null)
 onMounted(async () => {
   step.value = 'calling handleSignInCallback'
   try {
-    await handleSignInCallback(window.location.href)
+    await handleSignInCallback()
     step.value = 'callback done, navigating…'
     await router.replace('/')
   } catch (e) {

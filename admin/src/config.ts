@@ -6,17 +6,20 @@
 declare global {
   interface Window {
     __INFRA_ADMIN_CONFIG__?: {
-      logtoAppId: string
-      logtoEndpoint: string
-      logtoApiResource: string
+      issuer: string
+      clientId: string
+      projectId: string
     }
   }
 }
 
 export const config = {
-  logtoAppId: window.__INFRA_ADMIN_CONFIG__?.logtoAppId ?? import.meta.env.VITE_LOGTO_APP_ID ?? '',
-  logtoEndpoint: window.__INFRA_ADMIN_CONFIG__?.logtoEndpoint ?? import.meta.env.VITE_LOGTO_ENDPOINT ?? '',
-  logtoApiResource: window.__INFRA_ADMIN_CONFIG__?.logtoApiResource ?? import.meta.env.VITE_LOGTO_API_RESOURCE ?? '',
+  // OIDC issuer (Zitadel), e.g. http://auth.app.localhost
+  issuer: window.__INFRA_ADMIN_CONFIG__?.issuer ?? import.meta.env.VITE_OIDC_ISSUER ?? '',
+  // The Admin SPA's OIDC client id.
+  clientId: window.__INFRA_ADMIN_CONFIG__?.clientId ?? import.meta.env.VITE_OIDC_CLIENT_ID ?? '',
+  // The Infra API project id — requested as a token audience so KrakenD accepts the token.
+  projectId: window.__INFRA_ADMIN_CONFIG__?.projectId ?? import.meta.env.VITE_OIDC_PROJECT_ID ?? '',
   redirectUri: import.meta.env.VITE_REDIRECT_URI ?? '',
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
 }

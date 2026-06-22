@@ -28,7 +28,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: [
-      '@logto/vue',
+      'oidc-client-ts',
       '@tanstack/vue-query',
       '@vueuse/core',
       'radix-vue',

@@ -8,8 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@logto/vue": "^2.2.0",
     "@tanstack/vue-query": "^5.45.0",
+    "oidc-client-ts": "^3.1.0",
     "@vueuse/core": "^11.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",

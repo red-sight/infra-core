@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useLogto } from '@logto/vue'
+import { useAuth } from '@/composables/useAuth'
 import { useRoute } from 'vue-router'
 import Sidebar from '@/components/shell/Sidebar.vue'
 import TopBar from '@/components/shell/TopBar.vue'
@@ -8,7 +8,7 @@ import MobileNav from '@/components/shell/MobileNav.vue'
 import CommandPalette from '@/components/shell/CommandPalette.vue'
 import ToastRegion from '@/components/ui/ToastRegion.vue'
 
-const { isAuthenticated, isLoading, signIn } = useLogto()
+const { isAuthenticated, isLoading, signIn } = useAuth()
 const route = useRoute()
 
 // Sidebar highlight, topbar title, and the <main> remount key all key off the nav
@@ -24,7 +24,7 @@ const mobileOpen = ref(false)
 watch(
   [isLoading, isAuthenticated],
   ([loading, auth]) => {
-    if (!loading && !auth) signIn(import.meta.env.VITE_REDIRECT_URI)
+    if (!loading && !auth) signIn()
   },
   { immediate: true },
 )

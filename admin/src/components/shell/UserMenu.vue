@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useLogto } from '@logto/vue'
+import { useAuth } from '@/composables/useAuth'
 import { useQuery } from '@tanstack/vue-query'
 import Icon from '@/components/ui/Icon.vue'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -15,7 +15,7 @@ withDefaults(defineProps<{ width?: number; align?: 'start' | 'end'; up?: boolean
   up: false,
 })
 
-const { signOut, fetchUserInfo, isAuthenticated } = useLogto()
+const { signOut, fetchUserInfo, isAuthenticated } = useAuth()
 const nav = useNav()
 
 const { data: user } = useQuery({
@@ -29,7 +29,7 @@ const name = computed(() => user.value?.name ?? user.value?.email ?? 'Operator')
 const email = computed(() => user.value?.email ?? '—')
 
 function handleSignOut() {
-  signOut(window.location.origin)
+  signOut()
 }
 </script>
 
