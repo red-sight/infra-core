@@ -1,9 +1,0 @@
-{
-  "name": "logto-init",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "js-yaml": "^4.1.0",
-    "pg": "^8.13.3"
-  }
-}
