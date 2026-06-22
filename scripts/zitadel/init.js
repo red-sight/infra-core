@@ -255,6 +255,37 @@ async function ensureFlattenAction(orgId) {
   console.log('Flatten action wired to Complement Token triggers.');
 }
 
+// ensureAdminRole grants the platform admin user the `admin` project role so its
+// tokens carry the admin role (needed to use the admin API/console). The admin user
+// lives in the platform org alongside the project, so a direct user grant suffices
+// (no project grant). Idempotent.
+async function ensureAdminRole(orgId, projectId) {
+  const username = process.env.INFRA_ZITADEL_ADMIN_USERNAME ?? 'admin';
+  const { data } = await api('POST', '/management/v1/users/_search', {
+    queries: [{ typeQuery: { type: 'TYPE_HUMAN' } }],
+  }, { orgId });
+  const admin = (data.result ?? []).find((u) =>
+    (u.userName ?? '').startsWith(username + '@') || u.userName === username ||
+    (u.loginNames ?? []).some((l) => l.startsWith(username + '@')));
+  if (!admin) {
+    console.log(`Admin user "${username}" not found in platform org — skip role grant.`);
+    return;
+  }
+  const userId = admin.userId ?? admin.id;
+  try {
+    await api('POST', `/management/v1/users/${userId}/grants`, {
+      projectId, roleKeys: ['admin'],
+    }, { orgId });
+    console.log(`Granted admin role to ${userId}.`);
+  } catch (e) {
+    if (String(e.message).includes('already') || String(e.message).includes('Already')) {
+      console.log('Admin role already granted.');
+    } else {
+      throw e;
+    }
+  }
+}
+
 // ensureLoginClient provisions the service user the Login UI v2 container runs as.
 // It needs the instance-level IAM_LOGIN_CLIENT role and a PAT; the login container
 // reads the raw token from /run/infra/login-client.pat.
@@ -305,6 +336,7 @@ async function main() {
   for (const app of cfg.apps ?? []) await ensureApp(orgId, projectId, app);
   for (const m of cfg.machines ?? []) await ensureMachine(orgId, m);
   await ensureFlattenAction(orgId);
+  await ensureAdminRole(orgId, projectId);
   await ensureLoginClient(orgId);
 
   // Record the platform project id for backend services (registrator needs it to

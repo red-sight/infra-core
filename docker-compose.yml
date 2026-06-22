@@ -166,6 +166,8 @@ services:
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
       INFRA_ADMIN_SUBDOMAIN: ${INFRA_ADMIN_SUBDOMAIN:-admin}
+      # Used to grant the platform admin the `admin` project role on bootstrap.
+      INFRA_ZITADEL_ADMIN_USERNAME: ${INFRA_ZITADEL_ADMIN_USERNAME:-admin}
     restart: on-failure
 
   # Zitadel Login UI v2 — the hosted login is a separate app in Zitadel v4. The core
