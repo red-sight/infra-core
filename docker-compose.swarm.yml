@@ -14,11 +14,11 @@
 #     --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json) plus a
 #     persisted volume, and set `traefik.http.routers.*.tls.certresolver=le` /
 #     entrypoints=websecure on the routers. Needs a real domain + reachable host.
-#   * Docker secrets: move INFRA_PG_PASSWORD / INFRA_LOGTO_ADMIN_PASSWORD to
-#     `secrets:` with the `*_FILE` env convention. The registrator and
-#     service-core M2M files stay on the infra_init_data volume (generated at
-#     runtime by logto-init), which is why logto-init, registrator and
-#     service-core are pinned to the same node below.
+#   * Docker secrets: move INFRA_PG_PASSWORD / INFRA_ZITADEL_MASTERKEY /
+#     INFRA_ZITADEL_ADMIN_PASSWORD to `secrets:` with the `*_FILE` env convention.
+#     The registrator and service-core M2M files (and the login-client PAT) stay on
+#     the infra_init_data volume (generated at runtime by zitadel-init), which is why
+#     zitadel-init, registrator and service-core are pinned to the same node below.
 #
 # Resource limits are conservative starting points — tune to your node sizes.
 
@@ -81,7 +81,7 @@ services:
         reservations:
           memory: 32M
 
-  logto:
+  zitadel:
     deploy:
       replicas: 1
       restart_policy:
@@ -92,15 +92,42 @@ services:
         failure_action: rollback
       resources:
         limits:
-          memory: 512M
+          memory: 768M
         reservations:
-          memory: 128M
+          memory: 256M
 
-  # One-shot init job: seeds Logto config and writes the registrator M2M creds.
-  # restart_policy condition: none → runs to completion and stays exited.
-  # Pinned to the same node as the registrator so they share infra_init_data.
-  logto-init:
-    image: ${INFRA_LOGTO_INIT_IMAGE:-logto-init:latest}
+  # Makes the machinekey volume writable for Zitadel's non-root user before start.
+  zitadel-prepare:
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+      resources:
+        limits:
+          memory: 32M
+
+  # Login UI v2 (separate container in Zitadel v4). Reads the login-client PAT from
+  # infra_init_data, so pin it to the same node as zitadel-init.
+  zitadel-login:
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # One-shot init job: provisions the Zitadel instance and writes the registrator /
+  # service-core M2M creds + login-client PAT. restart_policy condition: none → runs
+  # to completion. Pinned to the same node as the registrator (shared infra_init_data).
+  zitadel-init:
+    image: ${INFRA_ZITADEL_INIT_IMAGE:-zitadel-init:latest}
     deploy:
       replicas: 1
       restart_policy:
@@ -142,7 +169,7 @@ services:
         order: start-first
         failure_action: rollback
       # Reads the service-core M2M creds from infra_init_data (written by
-      # logto-init), so it must run on the same node. See the secrets note in the
+      # zitadel-init), so it must run on the same node. See the secrets note in the
       # header — moving these creds to a Docker secret would remove this pin.
       placement:
         constraints:
@@ -183,7 +210,7 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
-      # Needs the Docker socket (manager) and shares infra_init_data with logto-init.
+      # Needs the Docker socket (manager) and shares infra_init_data with zitadel-init.
       placement:
         constraints:
           - node.role == manager

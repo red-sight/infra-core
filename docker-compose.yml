@@ -218,8 +218,8 @@ services:
     networks:
       - infra
     volumes:
-      # M2M creds written by logto-init; service-core reads them to provision
-      # organizations in Logto (the outbox worker's downstream target).
+      # M2M creds written by zitadel-init; service-core reads them to provision
+      # organizations in Zitadel (the outbox worker's downstream target).
       - infra_init_data:/run/infra:ro
     environment:
       DATABASE_URL: postgres://${INFRA_PG_USER:-postgres}:${INFRA_PG_PASSWORD:-postgres}@postgres:5432/${INFRA_PG_CORE_DB:-service_core}
@@ -356,7 +356,7 @@ services:
 
   # Shared multi-tenant frontend: one app serves every organization, selected by
   # subdomain (<slug>.<base>). The redirect URI for each tenant origin is registered
-  # in the shared Logto Tenant app by service-core's outbox on org creation.
+  # in the shared Zitadel Tenant app by service-core's outbox on org creation.
   tenant-web:
     build:
       context: ./tenant-web

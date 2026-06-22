@@ -11,3 +11,4 @@ node_modules
 config/krakend/krakend.json
 # Playwright MCP artifacts
 .playwright-mcp/
+config/krakend/.krakend.tmp-*
