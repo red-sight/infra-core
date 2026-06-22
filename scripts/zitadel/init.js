@@ -121,6 +121,10 @@ async function ensureApp(orgId, projectId, app) {
     appType: 'OIDC_APP_TYPE_USER_AGENT',
     authMethodType: 'OIDC_AUTH_METHOD_TYPE_NONE',
     accessTokenType: 'OIDC_TOKEN_TYPE_JWT',
+    // Assert project roles into the ACCESS token (not just id_token/userinfo) — the
+    // gateway validates the access token, so without this it carries no roles.
+    accessTokenRoleAssertion: true,
+    idTokenRoleAssertion: true,
     devMode: PROTO === 'http',
   };
 
@@ -145,7 +149,8 @@ async function ensureApp(orgId, projectId, app) {
     const changed = (a = [], b = []) => a.length !== b.length;
     if (changed(cur.redirectUris, next.redirectUris) ||
         changed(cur.postLogoutRedirectUris, next.postLogoutRedirectUris) ||
-        changed(cur.additionalOrigins, next.additionalOrigins)) {
+        changed(cur.additionalOrigins, next.additionalOrigins) ||
+        cur.accessTokenRoleAssertion !== true) {
       await api('PUT', `/management/v1/projects/${projectId}/apps/${appId}/oidc_config`, { ...oidc, ...next }, { orgId });
       console.log(`App "${app.name}" exists (${appId}), URIs reconciled.`);
     } else {
@@ -213,15 +218,20 @@ async function writeRunRaw(name, content, mode) {
 // the org id into `organization_id` — the flat claims the gateway propagates as
 // x-user-roles / x-organization-id. (Runs for interactive user tokens; the grants
 // context is not populated for client_credentials machine tokens.)
-const FLATTEN_SCRIPT = `function flatten(ctx, api) {
+// The function name MUST match the action name ("flattenRoles") — Zitadel invokes
+// the function whose name equals the action's name. The context API (v4.x):
+// ctx.v1.user.grants = { count, grants: [ { roles: [..], projectId, userResourceOwner } ] }.
+// ctx.v1.org is empty in this flow, so the org id comes from the grant's
+// userResourceOwner (the user's home org).
+const FLATTEN_SCRIPT = `function flattenRoles(ctx, api) {
   var roles = [];
   var orgId = "";
-  var grants = ctx.v1.getUserGrants();
-  if (grants) {
-    for (var i = 0; i < grants.count; i++) {
-      var g = grants.grants[i];
-      if (g.roles) { for (var j = 0; j < g.roles.length; j++) { roles.push(g.roles[j]); } }
-      if (g.orgID) { orgId = g.orgID; }
+  var ug = ctx.v1.user.grants;
+  if (ug && ug.grants) {
+    for (var i = 0; i < ug.grants.length; i++) {
+      var g = ug.grants[i];
+      if (g.roles) { for (var j = 0; j < g.roles.length; j++) { if (roles.indexOf(g.roles[j]) < 0) { roles.push(g.roles[j]); } } }
+      if (g.userResourceOwner) { orgId = g.userResourceOwner; }
     }
   }
   api.v1.claims.setClaim("roles", roles);
@@ -232,16 +242,22 @@ const FLATTEN_SCRIPT = `function flatten(ctx, api) {
 // Complement Token flow (trigger 4 = pre-userinfo, 5 = pre-access-token). Idempotent.
 async function ensureFlattenAction(orgId) {
   const name = 'flattenRoles';
+  const body = { name, script: FLATTEN_SCRIPT, timeout: '10s', allowedToFail: true };
   const { data } = await api('POST', '/management/v1/actions/_search', {}, { orgId });
   let actionId = (data.result ?? []).find((a) => a.name === name)?.id;
   if (!actionId) {
-    const created = await api('POST', '/management/v1/actions', {
-      name, script: FLATTEN_SCRIPT, timeout: '10s', allowedToFail: true,
-    }, { orgId });
+    const created = await api('POST', '/management/v1/actions', body, { orgId });
     actionId = created.data.id;
     console.log(`Created action ${name} (${actionId}).`);
   } else {
-    console.log(`Action ${name} exists (${actionId}).`);
+    // Update the script in case it changed; tolerate the no-op 400.
+    try {
+      await api('PUT', `/management/v1/actions/${actionId}`, body, { orgId });
+      console.log(`Action ${name} (${actionId}) updated.`);
+    } catch (e) {
+      if (!String(e.message).includes('No Changes')) throw e;
+      console.log(`Action ${name} (${actionId}) unchanged.`);
+    }
   }
   // Complement Token flow = type 2; triggers 4 (pre-userinfo) + 5 (pre-access-token).
   // Re-setting an unchanged trigger returns 400 "No Changes" — tolerate it (idempotent).
