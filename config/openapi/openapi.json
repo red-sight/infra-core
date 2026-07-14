@@ -347,6 +347,10 @@
             "readOnly": true,
             "type": "string"
           },
+          "external_id": {
+            "description": "Identity-provider organization ID (Zitadel); empty until synced. Used by the tenant frontend to scope login to this organization.",
+            "type": "string"
+          },
           "id": {
             "description": "Internal organization ID",
             "type": "string"
@@ -366,6 +370,7 @@
         },
         "required": [
           "id",
+          "external_id",
           "slug",
           "name",
           "is_master"

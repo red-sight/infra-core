@@ -446,6 +446,12 @@ type OrgProvisioner interface {
 	// project grant of the Infra API project to the org). Idempotent. Without it,
 	// the org's users get no roles in their tokens.
 	EnsureRoleAccess(ctx context.Context, externalID string) error
+	// EnsureRoleFlattenAction installs the identity provider's per-org token
+	// customization that flattens granted roles into a flat `roles` claim the
+	// gateway can read (in Zitadel a per-org Action on the token-complement flow).
+	// Idempotent. Without it, a member's granted roles never reach the token and
+	// the user appears to have no access in their organization.
+	EnsureRoleFlattenAction(ctx context.Context, externalID string) error
 	// EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs
 	// for the given origin on the shared Tenant application. Idempotent.
 	EnsureTenantRedirectURI(ctx context.Context, origin string) error
@@ -513,7 +519,14 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 		return err
 	}
 
-	// Step 3: ensure the tenant frontend's redirect URI is registered. Idempotent,
+	// Step 3: install the per-org token customization that flattens granted roles
+	// into the `roles` claim the gateway reads (idempotent). Without it, members'
+	// roles never reach their tokens. Re-run on every retry until it succeeds.
+	if err := p.EnsureRoleFlattenAction(ctx, extID); err != nil {
+		return err
+	}
+
+	// Step 4: ensure the tenant frontend's redirect URI is registered. Idempotent,
 	// re-run on every retry until it succeeds.
 	return p.EnsureTenantRedirectURI(ctx, originFor(cfg, org.Slug))
 }
@@ -528,14 +541,16 @@ func originFor(cfg HandlerConfig, slug string) string {
 	return fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, slug, cfg.BaseDomain)
 }
 
-// ReconcileRedirectURIs re-registers every provisioned organization's tenant
-// redirect URI in the identity provider. Those URIs are runtime state on the
-// shared Tenant app that an identity-provider re-init can reset; this idempotent
-// pass (safe on every startup) re-adds them so existing tenants keep working.
-// Best-effort: a per-org failure is logged and counted, the rest still run, and a
-// non-nil error is returned if any failed so the caller can retry the whole pass
-// (e.g. while M2M credentials are not yet available at startup).
-func ReconcileRedirectURIs(ctx context.Context, db *gorm.DB, p OrgProvisioner, cfg HandlerConfig) error {
+// ReconcileOrgs re-asserts every provisioned organization's per-org identity-
+// provider state: the role-flatten token customization and the tenant frontend's
+// redirect URI. Both are runtime state an identity-provider re-init can reset (and
+// the flatten action predates this reconcile, so existing orgs may lack it
+// entirely); this idempotent pass (safe on every startup) re-adds them so existing
+// tenants keep working. Best-effort: a per-org failure is logged and counted, the
+// rest still run, and a non-nil error is returned if any failed so the caller can
+// retry the whole pass (e.g. while M2M credentials are not yet available at
+// startup).
+func ReconcileOrgs(ctx context.Context, db *gorm.DB, p OrgProvisioner, cfg HandlerConfig) error {
 	var orgs []Organization
 	if err := db.WithContext(ctx).Find(&orgs).Error; err != nil {
 		return err
@@ -543,8 +558,13 @@ func ReconcileRedirectURIs(ctx context.Context, db *gorm.DB, p OrgProvisioner, c
 
 	var failed int
 	for _, o := range orgs {
-		// Only provisioned orgs have a tenant presence to register.
+		// Only provisioned orgs have a tenant presence to reconcile.
 		if o.ExternalID == nil || *o.ExternalID == "" {
+			continue
+		}
+		if err := p.EnsureRoleFlattenAction(ctx, *o.ExternalID); err != nil {
+			log.Printf("reconcile role-flatten action: org %q (%s): %v", o.Slug, o.ID, err)
+			failed++
 			continue
 		}
 		if err := p.EnsureTenantRedirectURI(ctx, originFor(cfg, o.Slug)); err != nil {
@@ -553,7 +573,7 @@ func ReconcileRedirectURIs(ctx context.Context, db *gorm.DB, p OrgProvisioner, c
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("reconcile redirect uris: %d organization(s) failed", failed)
+		return fmt.Errorf("reconcile organizations: %d organization(s) failed", failed)
 	}
 	return nil
 }

@@ -73,14 +73,14 @@ func main() {
 	})
 	go worker.Run(ctx)
 
-	// Reconcile tenant redirect URIs in the background: the identity provider's
-	// shared Tenant app can have its redirect URIs reset by a re-init, dropping the
-	// per-tenant callbacks. This idempotent pass re-adds them. Retry rides out the
-	// startup window before M2M creds are written; it stops once a full pass clears.
+	// Reconcile per-org identity-provider state in the background: a re-init can
+	// reset the shared Tenant app's redirect URIs and per-org token actions. This
+	// idempotent pass re-asserts them. Retry rides out the startup window before M2M
+	// creds are written; it stops once a full pass clears.
 	go func() {
 		for {
-			if err := organization.ReconcileRedirectURIs(ctx, db, idp, orgCfg); err != nil {
-				log.Printf("redirect-uri reconcile incomplete, retrying in 10s: %v", err)
+			if err := organization.ReconcileOrgs(ctx, db, idp, orgCfg); err != nil {
+				log.Printf("org reconcile incomplete, retrying in 10s: %v", err)
 				select {
 				case <-ctx.Done():
 					return
@@ -88,7 +88,7 @@ func main() {
 					continue
 				}
 			}
-			log.Println("redirect-uri reconcile complete")
+			log.Println("org reconcile complete")
 			return
 		}
 	}()

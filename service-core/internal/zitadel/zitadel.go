@@ -19,11 +19,40 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	orgdom "infra/service-core/internal/organization"
 )
+
+// flattenRolesActionName and flattenRolesScript define the Zitadel Action that
+// flattens Zitadel's object-shaped project-roles claim
+// (urn:zitadel:iam:org:project:<id>:roles = {role:{orgId:domain}}) into a flat
+// `roles` string array and lifts organization_id onto the token, so KrakenD can
+// map them to x-user-roles / x-organization-id. Zitadel v1 Actions are scoped to a
+// single organization, so every tenant org needs its own copy: the instance
+// bootstrap (scripts/zitadel/init.js, FLATTEN_SCRIPT) only wires it into the
+// platform org, never the tenant orgs provisioned here at runtime. This script
+// MUST stay in sync with FLATTEN_SCRIPT in scripts/zitadel/init.js. The function
+// name MUST equal the action name — Zitadel invokes the function whose name
+// matches the action's name.
+const flattenRolesActionName = "flattenRoles"
+
+const flattenRolesScript = `function flattenRoles(ctx, api) {
+  var roles = [];
+  var orgId = "";
+  var ug = ctx.v1.user.grants;
+  if (ug && ug.grants) {
+    for (var i = 0; i < ug.grants.length; i++) {
+      var g = ug.grants[i];
+      if (g.roles) { for (var j = 0; j < g.roles.length; j++) { if (roles.indexOf(g.roles[j]) < 0) { roles.push(g.roles[j]); } } }
+      if (g.userResourceOwner) { orgId = g.userResourceOwner; }
+    }
+  }
+  api.v1.claims.setClaim("roles", roles);
+  if (orgId) { api.v1.claims.setClaim("organization_id", orgId); }
+}`
 
 // httpTimeout bounds every outbound Zitadel request. Outbox delivery runs under a
 // per-event DB row lock, so a hung call must not stall indefinitely.
@@ -149,6 +178,73 @@ func (c *Client) EnsureRoleAccess(ctx context.Context, externalID string) error 
 
 	body := map[string]any{"grantedOrgId": externalID, "roleKeys": []string{"org_owner", "org_user"}}
 	return c.do(ctx, http.MethodPost, base, app.OrgID, body, nil)
+}
+
+// EnsureRoleFlattenAction creates the role-flattening Action in the tenant org and
+// wires it to the Complement Token flow, so a member's granted roles land in their
+// access token as a flat `roles` claim. Zitadel v1 Actions are per-organization, so
+// without this a tenant user's token carries Zitadel's nested roles object — which
+// the gateway cannot read — and the user appears to have no roles. The call scopes
+// to the tenant org via x-zitadel-orgid. Idempotent: reuses an existing action,
+// re-asserts the script, and tolerates the "No changes" 400 on unchanged
+// action/trigger updates so it is safe to re-run on every provisioning retry.
+func (c *Client) EnsureRoleFlattenAction(ctx context.Context, externalID string) error {
+	var search struct {
+		Result []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/management/v1/actions/_search", externalID, map[string]any{}, &search); err != nil {
+		return err
+	}
+
+	var actionID string
+	for _, a := range search.Result {
+		if a.Name == flattenRolesActionName {
+			actionID = a.ID
+			break
+		}
+	}
+
+	body := map[string]any{
+		"name":          flattenRolesActionName,
+		"script":        flattenRolesScript,
+		"timeout":       "10s",
+		"allowedToFail": true,
+	}
+	if actionID == "" {
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := c.do(ctx, http.MethodPost, "/management/v1/actions", externalID, body, &created); err != nil {
+			return err
+		}
+		actionID = created.ID
+	} else if err := c.do(ctx, http.MethodPut, "/management/v1/actions/"+actionID, externalID, body, nil); err != nil && !isNoChanges(err) {
+		return err
+	}
+
+	// Complement Token flow = type 2; triggers 4 (pre-userinfo) + 5 (pre-access-token).
+	for _, trigger := range []string{"4", "5"} {
+		path := "/management/v1/flows/2/trigger/" + trigger
+		req := map[string]any{"actionIds": []string{actionID}}
+		if err := c.do(ctx, http.MethodPost, path, externalID, req, nil); err != nil && !isNoChanges(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// isNoChanges reports whether err is a Zitadel 400 rejecting a no-op update
+// ("No changes"). Re-applying an unchanged action or flow trigger is expected under
+// the idempotent provisioning retries, so callers tolerate it.
+func isNoChanges(err error) bool {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.status == http.StatusBadRequest && strings.Contains(strings.ToLower(apiErr.body), "no changes")
+	}
+	return false
 }
 
 // EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs for
