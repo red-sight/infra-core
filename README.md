@@ -219,7 +219,17 @@ Reverse proxy and service discovery. Configured via Docker labels on each servic
 
 Image: `ghcr.io/zitadel/zitadel:v4.15.2`
 
-OIDC identity provider (one instance, one issuer, RS256; per-organization isolation). Depends on Postgres. Listens on `:8080` (gRPC + REST + console), routed via `auth.{{ domain }}`. The hosted login UI is a **separate container** (`zitadel-login`, `ghcr.io/zitadel/zitadel-login`) routed at `auth.{{ domain }}/ui/v2/login`; a one-shot `zitadel-prepare` makes the machinekey volume writable for Zitadel's non-root user.
+OIDC identity provider (one instance, one issuer, RS256; per-organization isolation). Depends on Postgres. Listens on `:8080` (gRPC + REST + console), routed via `auth.{{ domain }}`. The hosted login UI is a **separate container** (`zitadel-login`) routed at `auth.{{ domain }}/ui/v2/login`; a one-shot `zitadel-prepare` makes the machinekey volume writable for Zitadel's non-root user.
+
+### Zitadel Login UI v2
+
+Image: built from [`zitadel-login/`](zitadel-login/) (`INFRA_ZITADEL_LOGIN_IMAGE`)
+
+Login v2 is a separate Next.js app in Zitadel v4, so it is the one piece of the auth surface whose appearance we can own. We run a **fork of upstream `apps/login`** (vendored at tag `v4.15.2`), re-skinned to the admin console's font and radii — the login flow itself is upstream's, unmodified.
+
+The **colors** come from Zitadel's label policy (private labeling), which overrides anything compiled into the login. The platform palette is the `branding:` block in `scripts/zitadel/zitadel.config.yaml`, applied on every bootstrap by `zitadel-init`; edit it there, not in the fork. An organization that sets its own label policy overrides it, which is how per-org branding works.
+
+Setting `INFRA_ZITADEL_LOGIN_IMAGE=ghcr.io/zitadel/zitadel-login:v4.15.2` reverts to the stock upstream image — the runtime contract is identical. See [`zitadel-login/README.md`](zitadel-login/README.md) for the build, the exact list of changes, and the upstream re-sync procedure.
 
 OIDC endpoints (auto-derived from env vars):
 

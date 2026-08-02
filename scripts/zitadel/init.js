@@ -335,6 +335,47 @@ async function ensureLoginClient(orgId) {
   console.log('Wrote login-client.pat (PAT for Login UI v2).');
 }
 
+// ensureBranding applies the instance label policy ("private labeling"). This is
+// what actually colors the Login UI v2: the login reads the policy at runtime and
+// only falls back to its compiled-in defaults when a field is empty — so Zitadel's
+// stock blue would otherwise override the fork's re-skin.
+//
+// Label policy edits land in a preview and take effect only once activated, hence
+// the _activate call. Idempotent: the active policy is compared field by field and
+// left alone when it already matches.
+async function ensureBranding(branding) {
+  if (!branding) return;
+  const desired = {
+    primaryColor: branding.light.primaryColor,
+    backgroundColor: branding.light.backgroundColor,
+    warnColor: branding.light.warnColor,
+    fontColor: branding.light.fontColor,
+    primaryColorDark: branding.dark.primaryColor,
+    backgroundColorDark: branding.dark.backgroundColor,
+    warnColorDark: branding.dark.warnColor,
+    fontColorDark: branding.dark.fontColor,
+    hideLoginNameSuffix: branding.hideLoginNameSuffix ?? false,
+    disableWatermark: branding.disableWatermark ?? false,
+    themeMode: branding.themeMode ?? 'THEME_MODE_AUTO',
+  };
+
+  const current = await api('GET', '/admin/v1/policies/label', undefined, { okStatuses: [404] });
+  const active = current.data.policy ?? {};
+  // proto3 JSON omits false, so an absent boolean means false — compare accordingly,
+  // otherwise every run would re-PUT and Zitadel rejects a no-op update with 400.
+  const unchanged = Object.entries(desired).every(([k, v]) =>
+    typeof v === 'boolean' ? (active[k] ?? false) === v : active[k] === v,
+  );
+  if (unchanged) {
+    console.log('Branding policy already current — skip.');
+    return;
+  }
+
+  await api('PUT', '/admin/v1/policies/label', desired);
+  await api('POST', '/admin/v1/policies/label/_activate', {});
+  console.log('Applied instance branding policy.');
+}
+
 async function main() {
   console.log(`zitadel-init: waiting for ${API} ...`);
   await waitReady();
@@ -351,6 +392,7 @@ async function main() {
   await ensureRoles(orgId, projectId, cfg.project.roles ?? []);
   for (const app of cfg.apps ?? []) await ensureApp(orgId, projectId, app);
   for (const m of cfg.machines ?? []) await ensureMachine(orgId, m);
+  await ensureBranding(cfg.branding);
   await ensureFlattenAction(orgId);
   await ensureAdminRole(orgId, projectId);
   await ensureLoginClient(orgId);

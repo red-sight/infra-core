@@ -106,9 +106,12 @@ services:
         limits:
           memory: 32M
 
-  # Login UI v2 (separate container in Zitadel v4). Reads the login-client PAT from
-  # infra_init_data, so pin it to the same node as zitadel-init.
+  # Login UI v2 (separate container in Zitadel v4) — our fork, built from
+  # ./zitadel-login. Swarm ignores `build`, so the image must be pushed by CI.
+  # Reads the login-client PAT from infra_init_data, so pin it to the same node
+  # as zitadel-init.
   zitadel-login:
+    image: ${INFRA_ZITADEL_LOGIN_IMAGE:-zitadel-login:latest}
     deploy:
       replicas: 1
       restart_policy:

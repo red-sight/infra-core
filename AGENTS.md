@@ -6,7 +6,7 @@ Read this before working on anything in this repository.
 
 A self-assembling Docker infrastructure suite. Candidate microservices join by adding Docker labels and a healthcheck — Infra discovers them, reads their OpenAPI docs, and registers their endpoints with the API gateway automatically. No manual gateway config.
 
-Core components: Traefik (routing), Zitadel (OIDC identity provider) + its Login UI v2 container, KrakenD (API gateway), Postgres, Redis, the Registrator (the custom Go service that wires everything together), and zitadel-init (a one-shot Node.js init container).
+Core components: Traefik (routing), Zitadel (OIDC identity provider) + our forked Login UI v2 container (`zitadel-login/`), KrakenD (API gateway), Postgres, Redis, the Registrator (the custom Go service that wires everything together), and zitadel-init (a one-shot Node.js init container).
 
 ## Documentation
 
@@ -14,6 +14,7 @@ Three docs must be kept up to date as the project evolves:
 
 - `README.md` — user-facing: getting started, routing, services, authorization model
 - `registrator/README.md` — implementer-facing: Registrator internals, env vars, KrakenD config generation, service contract
+- `zitadel-login/README.md` — the forked Login UI: what we changed, how to build it, how to re-sync an upstream release
 - `AGENTS.md` — agent-facing: key decisions, constraints, open items
 
 **Rule:** when a feature changes how the system works, update the relevant doc(s) before committing. Do not leave docs describing unimplemented designs or outdated behavior.
@@ -60,6 +61,10 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 
 **All initial Zitadel config via `scripts/zitadel/init.js`.** Never configure Zitadel manually via the console for anything the bootstrap manages (project/roles/apps/machine users/flatten action/admin role) — `zitadel-init` runs on every `compose up` and reconciles idempotently. Structural declarations (project, roles, app keys, machine users) live in `scripts/zitadel/zitadel.config.yaml`. Runtime changes not covered by the bootstrap may use the Management API directly.
 
+**The Login UI v2 is a fork we build, not the upstream image.** Login v2 is a separate Next.js app in Zitadel v4, so it is the only part of the auth surface whose appearance we can own beyond Zitadel's private labeling (colors/logo). `zitadel-login/` vendors upstream `apps/login` at tag `v4.15.2`, re-skinned to admin's tokens (zinc palette, Geist, `--radius*`); the login flow and its security surface are untouched. It mirrors upstream's monorepo layout (`apps/login` + `packages/zitadel-client` + `packages/zitadel-proto` + `proto/`) so re-syncing is a copy, not a re-patch — the npm `@zitadel/client`/`@zitadel/proto` are unusable (last published from the archived `zitadel/typescript`, a year behind v4). Proto codegen is hermetic: `proto-deps/` vendors the third-party protos and our root `buf.yaml` replaces upstream's BSR-backed `proto/buf.yaml`, so no Buf Schema Registry access is needed to build. `INFRA_ZITADEL_LOGIN_IMAGE` selects the image and can be pointed back at `ghcr.io/zitadel/zitadel-login:v4.15.2` — the runtime contract is unchanged. Keep the fork's tag, the core image and that fallback in lockstep on upgrades.
+
+**The login's colors come from the Zitadel label policy, not from the fork.** Private labeling overrides the login's compiled-in defaults for every field it sets, and Zitadel's stock instance policy ships its own blue — so re-skinning the fork alone changes nothing on screen. The effective palette is the `branding:` block in `scripts/zitadel/zitadel.config.yaml`, applied by `zitadel-init` (`ensureBranding`) as an instance label policy; the constants in the fork's `helpers/colors.ts` mirror it as the fallback for orgs with no policy. **Change both together.** Two Zitadel quirks the bootstrap handles: label policy edits land in a preview and need `POST /admin/v1/policies/label/_activate`, and a no-op `PUT` is rejected with 400 ("has not been changed") — so the desired state is diffed against the active policy first, treating an absent boolean as `false` (proto3 omits it).
+
 **Roles reach the access token only with three things set**: the OIDC app's `accessTokenRoleAssertion: true` (else roles go only to id_token/userinfo); the SPA requesting `urn:zitadel:iam:org:projects:roles`; and the **flatten Action** (Complement Token flow) that turns Zitadel's object roles claim `urn:zitadel:iam:org:project:<id>:roles` into a flat `roles` array + `organization_id` — KrakenD can't read the object form. The Action's JS function name must equal the action name; grants are read from `ctx.v1.user.grants`. **Zitadel Actions are per-organization**: the bootstrap installs the flatten Action only in the platform org, so `service-core` installs a per-org copy in each tenant org it provisions (`EnsureRoleFlattenAction`). The Go action script in `internal/zitadel` and `FLATTEN_SCRIPT` in `scripts/zitadel/init.js` must stay in sync.
 
 **`infra_init_data` volume.** Shared between `zitadel-init`, `zitadel-login`, `registrator`, `service-core`, `admin` and `tenant-web`. `zitadel-init` writes machine-user PATs to `/run/infra/registrator-m2m.json` and `/run/infra/service-core-m2m.json` (`{token, apiEndpoint, issuer}`), the Login UI v2 PAT to `login-client.pat` (mode 0644 — the login container is non-root), per-app SPA configs `admin-app.json` / `tenant-app.json` (`{issuer, clientId, projectId, appId, orgId}` — read by the frontends, and `tenant-app.json` also by service-core to append per-org redirect URIs), and `zitadel-platform.json` (`{issuer, projectId, orgId}` — read by the Registrator for the JWT audience). The Zitadel FirstInstance admin PAT (`admin-sa.pat`) is on a separate `zitadel_machinekey` volume. In Swarm the readers are pinned to the same node; moving creds to Docker secrets would remove that pin.
@@ -86,7 +91,7 @@ Swarm ignores `depends_on` and `build`. Compose ignores `deploy`. The split is i
 |---|---|
 | Traefik | `traefik:v3.7` |
 | Zitadel | `ghcr.io/zitadel/zitadel:v4.15.2` |
-| Zitadel Login UI v2 | `ghcr.io/zitadel/zitadel-login:v4.15.2` |
+| Zitadel Login UI v2 | built from `zitadel-login/` (fork of upstream `apps/login` @ `v4.15.2`) |
 | KrakenD | `krakend:latest` |
 | Postgres | `postgres:17-alpine` |
 | Redis | `redis:7-alpine` |

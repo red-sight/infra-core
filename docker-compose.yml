@@ -173,8 +173,16 @@ services:
   # Zitadel Login UI v2 — the hosted login is a separate app in Zitadel v4. The core
   # only redirects OIDC auth to /ui/v2/login; this container serves it. Runs as the
   # login-client service user (IAM_LOGIN_CLIENT) whose PAT zitadel-init writes.
+  #
+  # This is our fork of upstream `apps/login`, vendored in ./zitadel-login and
+  # re-skinned to the admin console's design tokens. The runtime contract is
+  # unchanged, so setting INFRA_ZITADEL_LOGIN_IMAGE=ghcr.io/zitadel/zitadel-login:v4.15.2
+  # falls back to the stock upstream image. Keep the fallback tag in sync with the
+  # zitadel core image when upgrading.
   zitadel-login:
-    image: ghcr.io/zitadel/zitadel-login:v4.15.2
+    image: ${INFRA_ZITADEL_LOGIN_IMAGE:-zitadel-login:latest}
+    build:
+      context: ./zitadel-login
     restart: unless-stopped
     networks:
       - infra

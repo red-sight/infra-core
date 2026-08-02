@@ -31,6 +31,30 @@ apps:
     origins:
       - "http://localhost:5174"
 
+# Instance-level branding (Zitadel "private labeling"), applied to the Login UI v2.
+# The forked login reads these at runtime and they WIN over its compiled-in defaults
+# in zitadel-login/apps/login/src/helpers/colors.ts — so this block, not the fork's
+# source, is what actually colors the login. Keep the two in sync; the fork's values
+# are only the fallback for an org whose policy is unset.
+#
+# Values mirror admin/src/assets/theme.css. Organizations may override this with
+# their own label policy later (that is how per-org branding is meant to work).
+branding:
+  light:
+    primaryColor: "#18181b" # admin --primary
+    backgroundColor: "#ffffff" # admin --background
+    warnColor: "#dc2626" # admin --destructive
+    fontColor: "#09090b" # admin --foreground
+  dark:
+    primaryColor: "#fafafa"
+    backgroundColor: "#18181b"
+    warnColor: "#f87171"
+    fontColor: "#fafafa"
+  # AUTO follows the OS preference; the login also has a manual switch.
+  themeMode: THEME_MODE_AUTO
+  hideLoginNameSuffix: false
+  disableWatermark: true
+
 # Machine (service-account) users for backend services that call the Management API.
 # Each gets a PAT written to /run/infra/<file> (mirrors the old M2M credential files).
 machines:
