@@ -1,0 +1,11 @@
+# FORK: buf v2 workspace replacing upstream's proto/buf.yaml (v1, BSR-backed).
+# `proto` holds ZITADEL's protos verbatim; `proto-deps` holds the third-party
+# imports they need, vendored from the BSR commits pinned by upstream's
+# proto/buf.lock (see proto-deps/README.md). Codegen is therefore hermetic.
+#
+# Lint/breaking config is intentionally omitted: we do not author these protos,
+# we only generate TypeScript from them.
+version: v2
+modules:
+  - path: proto
+  - path: proto-deps

@@ -1,0 +1,14 @@
+node_modules
+.next
+dist
+*.log
+.env*.local
+
+# @zitadel/proto is generated from ../../proto by `pnpm run generate:proto`.
+packages/zitadel-proto/es
+packages/zitadel-proto/cjs
+packages/zitadel-proto/types
+packages/zitadel-proto/zitadel
+packages/zitadel-proto/google
+packages/zitadel-proto/validate
+packages/zitadel-proto/protoc-gen-openapiv2
