@@ -46,7 +46,7 @@ func main() {
 
 	// Seed the default (master) organization — the apex-domain org for the
 	// non-SaaS case — if it does not exist yet. Idempotent.
-	if err := organization.EnsureMaster(db, env("INFRA_DEFAULT_ORG_NAME", "Master")); err != nil {
+	if err := organization.EnsureMaster(db, env("INFRA_DEFAULT_ORG_NAME", "My Organization")); err != nil {
 		log.Fatalf("seed default organization: %v", err)
 	}
 
@@ -65,6 +65,13 @@ func main() {
 	orgCfg := organization.HandlerConfig{
 		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
 		BaseDomain:   baseDomain,
+		// Master-org owner: presence of the email triggers owner provisioning on the
+		// apex org (single-org deploy). Absent → SaaS-style, no seeded owner.
+		DefaultOrgOwner: organization.Owner{
+			Email:    env("INFRA_DEFAULT_ORG_OWNER_EMAIL", ""),
+			Name:     env("INFRA_DEFAULT_ORG_OWNER_NAME", ""),
+			Password: env("INFRA_DEFAULT_ORG_OWNER_PASSWORD", ""),
+		},
 	}
 	handler := organization.NewOutboxHandler(idp, orgCfg)
 	worker := outbox.NewWorker(db, handler, outbox.Config{

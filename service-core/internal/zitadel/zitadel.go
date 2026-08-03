@@ -150,12 +150,13 @@ func (c *Client) findOrgByName(ctx context.Context, name string) (string, bool, 
 }
 
 // EnsureRoleAccess grants the shared Infra API project to the given organization
-// (a Zitadel "project grant"), so its members can be assigned org_owner/org_user.
-// Without a project grant, a user grant in a tenant org asserts no roles in the
-// token. Idempotent: skips if a grant for the org already exists. Tenant orgs are
-// granted org_owner/org_user only — never the platform "admin" role (that would let
-// a tenant assign platform-wide admin to its own users).
-func (c *Client) EnsureRoleAccess(ctx context.Context, externalID string) error {
+// (a Zitadel "project grant"), so its members can be assigned the given roleKeys.
+// Without a project grant, a user grant in an org asserts no roles in the token.
+// Idempotent: creates the grant if absent, and widens an existing grant's roles if
+// any requested key is missing (tolerating the "No changes" 400). Tenant orgs are
+// granted org_owner/org_user only — the platform "admin" role is reserved for the
+// master org (passing it to a tenant would let it self-assign platform admin).
+func (c *Client) EnsureRoleAccess(ctx context.Context, externalID string, roleKeys []string) error {
 	app, err := c.loadTenantApp()
 	if err != nil {
 		return err
@@ -164,20 +165,137 @@ func (c *Client) EnsureRoleAccess(ctx context.Context, externalID string) error 
 
 	var res struct {
 		Result []struct {
-			GrantedOrgID string `json:"grantedOrgId"`
+			GrantID      string   `json:"grantId"`
+			GrantedOrgID string   `json:"grantedOrgId"`
+			RoleKeys     []string `json:"grantedRoleKeys"` // GrantedProject.granted_role_keys, not roleKeys
 		} `json:"result"`
 	}
 	if err := c.do(ctx, http.MethodPost, base+"/_search", app.OrgID, map[string]any{}, &res); err != nil {
 		return err
 	}
 	for _, g := range res.Result {
-		if g.GrantedOrgID == externalID {
+		if g.GrantedOrgID != externalID {
+			continue
+		}
+		merged, changed := unionStrings(g.RoleKeys, roleKeys)
+		if !changed {
 			return nil
 		}
+		body := map[string]any{"roleKeys": merged}
+		if err := c.do(ctx, http.MethodPut, base+"/"+g.GrantID, app.OrgID, body, nil); err != nil && !isNoChanges(err) {
+			return err
+		}
+		return nil
 	}
 
-	body := map[string]any{"grantedOrgId": externalID, "roleKeys": []string{"org_owner", "org_user"}}
+	body := map[string]any{"grantedOrgId": externalID, "roleKeys": roleKeys}
 	return c.do(ctx, http.MethodPost, base, app.OrgID, body, nil)
+}
+
+// EnsureOwner idempotently ensures the org has a human owner with the given roles.
+// It reuses an existing user with the same email (so re-runs and reconcile passes are
+// safe), otherwise creates the human with a verified email and the supplied initial
+// password, then assigns the org-scoped roleKeys as a user grant on the shared Infra
+// API project. Role assignment tolerates an already-existing grant. The org's project
+// grant (EnsureRoleAccess) must already include these roleKeys for them to resolve in
+// the owner's token.
+func (c *Client) EnsureOwner(ctx context.Context, externalID string, o orgdom.Owner, roleKeys []string) error {
+	app, err := c.loadTenantApp()
+	if err != nil {
+		return err
+	}
+
+	userID, err := c.findUserByEmail(ctx, externalID, o.Email)
+	if err != nil {
+		return err
+	}
+	if userID == "" {
+		first, last := splitName(o.Name, o.Email)
+		body := map[string]any{
+			"userName": o.Email,
+			"profile":  map[string]any{"firstName": first, "lastName": last},
+			"email":    map[string]any{"email": o.Email, "isEmailVerified": true},
+		}
+		if o.Password != "" {
+			body["initialPassword"] = o.Password
+		}
+		var created struct {
+			UserID string `json:"userId"`
+		}
+		if err := c.do(ctx, http.MethodPost, "/management/v1/users/human", externalID, body, &created); err != nil {
+			return err
+		}
+		userID = created.UserID
+	}
+
+	grant := map[string]any{"projectId": app.ProjectID, "roleKeys": roleKeys}
+	if err := c.do(ctx, http.MethodPost, "/management/v1/users/"+userID+"/grants", externalID, grant, nil); err != nil && !isAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// findUserByEmail returns the id of a user with the exact email in the org, or "" if
+// none. Used to make owner provisioning idempotent.
+func (c *Client) findUserByEmail(ctx context.Context, orgID, email string) (string, error) {
+	q := map[string]any{"queries": []map[string]any{
+		{"emailQuery": map[string]any{"emailAddress": email, "method": "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE"}},
+	}}
+	var res struct {
+		Result []struct {
+			ID string `json:"id"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/management/v1/users/_search", orgID, q, &res); err != nil {
+		return "", err
+	}
+	if len(res.Result) == 0 {
+		return "", nil
+	}
+	return res.Result[0].ID, nil
+}
+
+// splitName derives Zitadel's required first/last name from an optional display name,
+// falling back to the email local-part. Zitadel requires both to be non-empty, so a
+// single token is used for both.
+func splitName(name, email string) (string, string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.SplitN(email, "@", 2)[0]
+	}
+	if parts := strings.Fields(name); len(parts) >= 2 {
+		return parts[0], strings.Join(parts[1:], " ")
+	}
+	return name, name
+}
+
+// unionStrings returns want merged into have, and whether anything was added.
+func unionStrings(have, want []string) ([]string, bool) {
+	seen := make(map[string]bool, len(have))
+	for _, h := range have {
+		seen[h] = true
+	}
+	merged := append([]string(nil), have...)
+	changed := false
+	for _, w := range want {
+		if !seen[w] {
+			seen[w] = true
+			merged = append(merged, w)
+			changed = true
+		}
+	}
+	return merged, changed
+}
+
+// isAlreadyExists reports whether err is a Zitadel conflict for an entity that
+// already exists (e.g. a user grant re-added on an idempotent retry).
+func isAlreadyExists(err error) bool {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.status == http.StatusConflict ||
+			(apiErr.status == http.StatusBadRequest && strings.Contains(strings.ToLower(apiErr.body), "already"))
+	}
+	return false
 }
 
 // EnsureRoleFlattenAction creates the role-flattening Action in the tenant org and

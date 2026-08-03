@@ -238,9 +238,15 @@ services:
       # OIDC redirect-URI registration.
       INFRA_HTTP_PROTOCOL: ${INFRA_HTTP_PROTOCOL:-http}
       INFRA_HTTP_BASE_DOMAIN: ${INFRA_HTTP_BASE_DOMAIN:-app.localhost}
-      # Default (apex-domain) organization for the non-SaaS case — seeded on
+      # Default (apex-domain) organization for the single-org case — seeded on
       # startup if absent.
-      INFRA_DEFAULT_ORG_NAME: ${INFRA_DEFAULT_ORG_NAME:-Master}
+      INFRA_DEFAULT_ORG_NAME: ${INFRA_DEFAULT_ORG_NAME:-My Organization}
+      # Master-org owner: if the email is set, service-core provisions a human owner
+      # (org_owner + admin, so they can use the admin panel) on the apex org. Unset →
+      # SaaS-style, no seeded owner. Password is the owner's initial password.
+      INFRA_DEFAULT_ORG_OWNER_EMAIL: ${INFRA_DEFAULT_ORG_OWNER_EMAIL:-}
+      INFRA_DEFAULT_ORG_OWNER_PASSWORD: ${INFRA_DEFAULT_ORG_OWNER_PASSWORD:-}
+      INFRA_DEFAULT_ORG_OWNER_NAME: ${INFRA_DEFAULT_ORG_OWNER_NAME:-}
       OUTBOX_POLL_INTERVAL: ${INFRA_CORE_OUTBOX_POLL_INTERVAL:-2s}
       OUTBOX_MAX_ATTEMPTS: ${INFRA_CORE_OUTBOX_MAX_ATTEMPTS:-10}
     healthcheck:

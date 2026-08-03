@@ -442,10 +442,10 @@ type OrgProvisioner interface {
 	// core ID on its custom data, and returns the external ID.
 	Create(ctx context.Context, name, description, coreID string) (externalID string, err error)
 	// EnsureRoleAccess grants the organization access to the shared platform roles
-	// so its members can be assigned org_owner/org_user (in Zitadel this is a
+	// so its members can be assigned the given roleKeys (in Zitadel this is a
 	// project grant of the Infra API project to the org). Idempotent. Without it,
 	// the org's users get no roles in their tokens.
-	EnsureRoleAccess(ctx context.Context, externalID string) error
+	EnsureRoleAccess(ctx context.Context, externalID string, roleKeys []string) error
 	// EnsureRoleFlattenAction installs the identity provider's per-org token
 	// customization that flattens granted roles into a flat `roles` claim the
 	// gateway can read (in Zitadel a per-org Action on the token-complement flow).
@@ -455,13 +455,35 @@ type OrgProvisioner interface {
 	// EnsureTenantRedirectURI registers the tenant frontend's OIDC redirect URIs
 	// for the given origin on the shared Tenant application. Idempotent.
 	EnsureTenantRedirectURI(ctx context.Context, origin string) error
+	// EnsureOwner ensures the org has a human owner (created if absent) holding the
+	// given roleKeys. Idempotent (reuses a user with the same email).
+	EnsureOwner(ctx context.Context, externalID string, o Owner, roleKeys []string) error
 }
 
+// Owner is the human owner to provision for an organization: the master org's owner
+// comes from deploy config, a tenant org's from the create request. Password is an
+// initial password; empty means none is set (an invite/reset flow supplies it later).
+type Owner struct {
+	Email    string
+	Name     string
+	Password string
+}
+
+// Role keys on the shared Infra API project. Tenant orgs get org_owner/org_user;
+// the master org additionally gets admin so its owner can run the admin panel.
+var (
+	tenantOrgRoles   = []string{"org_owner", "org_user"}
+	masterOrgRoles   = []string{"org_owner", "org_user", "admin"}
+	masterOwnerRoles = []string{"org_owner", "admin"}
+)
+
 // HandlerConfig carries the deployment URL shape needed to derive a tenant's
-// frontend origin (<protocol>://<slug>.<baseDomain>).
+// frontend origin (<protocol>://<slug>.<baseDomain>), plus the default (master) org
+// owner seeded from deploy config when its email is set.
 type HandlerConfig struct {
-	HTTPProtocol string
-	BaseDomain   string
+	HTTPProtocol    string
+	BaseDomain      string
+	DefaultOrgOwner Owner
 }
 
 // NewOutboxHandler returns an outbox.Handler that provisions organizations in the
@@ -513,9 +535,17 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 		}
 	}
 
+	// The master org (empty slug) is the product owner's org: it additionally gets
+	// the platform admin role so its owner can run the admin panel.
+	master := org.Slug == ""
+	orgRoles := tenantOrgRoles
+	if master {
+		orgRoles = masterOrgRoles
+	}
+
 	// Step 2: grant the org access to the shared platform roles (idempotent), so its
-	// members can hold org_owner/org_user. Re-run on every retry until it succeeds.
-	if err := p.EnsureRoleAccess(ctx, extID); err != nil {
+	// members can hold those roles. Re-run on every retry until it succeeds.
+	if err := p.EnsureRoleAccess(ctx, extID, orgRoles); err != nil {
 		return err
 	}
 
@@ -528,7 +558,19 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 
 	// Step 4: ensure the tenant frontend's redirect URI is registered. Idempotent,
 	// re-run on every retry until it succeeds.
-	return p.EnsureTenantRedirectURI(ctx, originFor(cfg, org.Slug))
+	if err := p.EnsureTenantRedirectURI(ctx, originFor(cfg, org.Slug)); err != nil {
+		return err
+	}
+
+	// Step 5: seed the master org's owner from deploy config (idempotent). Tenant
+	// orgs get their owner from the create request; that path is not wired yet, so
+	// only the config-driven master owner is provisioned here.
+	if master && cfg.DefaultOrgOwner.Email != "" {
+		if err := p.EnsureOwner(ctx, extID, cfg.DefaultOrgOwner, masterOwnerRoles); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // originFor derives a tenant frontend's origin (<proto>://<slug>.<base>). The
@@ -570,6 +612,19 @@ func ReconcileOrgs(ctx context.Context, db *gorm.DB, p OrgProvisioner, cfg Handl
 		if err := p.EnsureTenantRedirectURI(ctx, originFor(cfg, o.Slug)); err != nil {
 			log.Printf("reconcile redirect uri: org %q (%s): %v", o.Slug, o.ID, err)
 			failed++
+		}
+		// Heal the master org's config-driven owner (idempotent): covers a master
+		// provisioned before owner-seeding existed, or a failed initial attempt.
+		// Widen the project grant to include admin first, else the owner's admin role
+		// would not resolve in their token.
+		if o.Slug == "" && cfg.DefaultOrgOwner.Email != "" {
+			if err := p.EnsureRoleAccess(ctx, *o.ExternalID, masterOrgRoles); err != nil {
+				log.Printf("reconcile master role access: org %q (%s): %v", o.Slug, o.ID, err)
+				failed++
+			} else if err := p.EnsureOwner(ctx, *o.ExternalID, cfg.DefaultOrgOwner, masterOwnerRoles); err != nil {
+				log.Printf("reconcile owner: org %q (%s): %v", o.Slug, o.ID, err)
+				failed++
+			}
 		}
 	}
 	if failed > 0 {
