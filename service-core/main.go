@@ -43,6 +43,8 @@ func main() {
 	db := mustDB(dsn)
 
 	baseDomain := env("INFRA_HTTP_BASE_DOMAIN", "app.localhost")
+	// The master org's own host; defaults to the base domain (master on the apex).
+	defaultOrgDomain := env("INFRA_DEFAULT_ORG_DOMAIN", baseDomain)
 
 	// Seed the default (master) organization — the apex-domain org for the
 	// non-SaaS case — if it does not exist yet. Idempotent.
@@ -63,8 +65,9 @@ func main() {
 		env("INFRA_TENANT_APP_FILE", "/run/infra/tenant-app.json"),
 	)
 	orgCfg := organization.HandlerConfig{
-		HTTPProtocol: env("INFRA_HTTP_PROTOCOL", "http"),
-		BaseDomain:   baseDomain,
+		HTTPProtocol:     env("INFRA_HTTP_PROTOCOL", "http"),
+		BaseDomain:       baseDomain,
+		DefaultOrgDomain: defaultOrgDomain,
 		// Master-org owner: presence of the email triggers owner provisioning on the
 		// apex org (single-org deploy). Absent → SaaS-style, no seeded owner.
 		DefaultOrgOwner: organization.Owner{
@@ -108,7 +111,7 @@ func main() {
 	})
 
 	api := humachi.New(router, huma.DefaultConfig("Service Core", "v1"))
-	organization.RegisterRoutes(api, db, baseDomain, idp)
+	organization.RegisterRoutes(api, db, baseDomain, defaultOrgDomain, idp)
 
 	srv := &http.Server{
 		Addr:    ":" + env("PORT", "8080"),

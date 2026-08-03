@@ -43,11 +43,12 @@ type OrgResponse struct {
 }
 
 // domainFor derives the organization's frontend hostname. The master org (empty
-// slug) lives on the apex domain; everyone else on a "<slug>.<base>" subdomain.
-// Mirrors the origin derivation in provisionOrg, without the protocol.
+// slug) lives on the default-org domain (its own host, defaulting to the base
+// domain); everyone else on a "<slug>.<base>" subdomain. Mirrors the origin
+// derivation in provisionOrg, without the protocol.
 func (h *handler) domainFor(slug string) string {
 	if slug == "" {
-		return h.baseDomain
+		return h.defaultOrgDomain
 	}
 	return slug + "." + h.baseDomain
 }
@@ -91,8 +92,8 @@ func validateSlug(slug string) error {
 	return nil
 }
 
-func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string, dir Directory) {
-	h := &handler{db: db, baseDomain: baseDomain, dir: dir}
+func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain, defaultOrgDomain string, dir Directory) {
+	h := &handler{db: db, baseDomain: baseDomain, defaultOrgDomain: defaultOrgDomain, dir: dir}
 
 	huma.Register(api, huma.Operation{
 		OperationID: "list-organizations",
@@ -161,9 +162,10 @@ func RegisterRoutes(api huma.API, db *gorm.DB, baseDomain string, dir Directory)
 }
 
 type handler struct {
-	db         *gorm.DB
-	baseDomain string
-	dir        Directory
+	db               *gorm.DB
+	baseDomain       string
+	defaultOrgDomain string
+	dir              Directory
 }
 
 // MemberRole is an org-scoped role assigned to a member.
@@ -391,8 +393,8 @@ func (h *handler) getByHost(ctx context.Context, input *getByHostInput) (*tenant
 
 	var slug string
 	switch {
-	case host == h.baseDomain:
-		slug = "" // apex → master organization
+	case host == h.defaultOrgDomain:
+		slug = "" // default-org domain → master organization
 	case strings.HasSuffix(host, "."+h.baseDomain):
 		label := strings.TrimSuffix(host, "."+h.baseDomain)
 		if label == "" || strings.Contains(label, ".") {
@@ -481,9 +483,13 @@ var (
 // frontend origin (<protocol>://<slug>.<baseDomain>), plus the default (master) org
 // owner seeded from deploy config when its email is set.
 type HandlerConfig struct {
-	HTTPProtocol    string
-	BaseDomain      string
-	DefaultOrgOwner Owner
+	HTTPProtocol string
+	BaseDomain   string
+	// DefaultOrgDomain is the host the master org (empty slug) is served on. Defaults
+	// to BaseDomain (master on the apex); set independently when the product org lives
+	// on its own domain distinct from the platform base domain.
+	DefaultOrgDomain string
+	DefaultOrgOwner  Owner
 }
 
 // NewOutboxHandler returns an outbox.Handler that provisions organizations in the
@@ -574,11 +580,12 @@ func provisionOrg(ctx context.Context, tx *gorm.DB, p OrgProvisioner, cfg Handle
 }
 
 // originFor derives a tenant frontend's origin (<proto>://<slug>.<base>). The
-// master organization (empty slug) lives on the apex domain; everyone else on a
-// subdomain. Shared by provisioning and reconciliation.
+// master organization (empty slug) lives on the default-org domain (its own host,
+// defaulting to the base domain); everyone else on a subdomain. Shared by
+// provisioning and reconciliation.
 func originFor(cfg HandlerConfig, slug string) string {
 	if slug == "" {
-		return fmt.Sprintf("%s://%s", cfg.HTTPProtocol, cfg.BaseDomain)
+		return fmt.Sprintf("%s://%s", cfg.HTTPProtocol, cfg.DefaultOrgDomain)
 	}
 	return fmt.Sprintf("%s://%s.%s", cfg.HTTPProtocol, slug, cfg.BaseDomain)
 }

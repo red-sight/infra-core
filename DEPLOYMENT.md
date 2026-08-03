@@ -49,6 +49,8 @@ that's intended, not a gap.
 `INFRA_HTTP_BASE_DOMAIN` is the single knob. Layout per mode:
 
 - **Single-org**: apex `<base>` = user app (master org); `admin.<base>` = admin; `auth.<base>` = Zitadel.
+  The master org's host is `INFRA_DEFAULT_ORG_DOMAIN` (blank → the base apex); set it to give the
+  product org its own domain distinct from the platform base (needs its own route + TLS).
 - **Local dev**: set `INFRA_HTTP_BASE_DOMAIN=localhost` → apex `localhost`, `admin.localhost`,
   `auth.localhost`; drop the current `app.localhost` default. `*.localhost` resolves to loopback
   in browsers, no hosts file.
