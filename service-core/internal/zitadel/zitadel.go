@@ -383,6 +383,7 @@ func (c *Client) EnsureTenantRedirectURI(ctx context.Context, origin string) err
 				RedirectURIs           []string `json:"redirectUris"`
 				PostLogoutRedirectURIs []string `json:"postLogoutRedirectUris"`
 				AdditionalOrigins      []string `json:"additionalOrigins"`
+				DevMode                bool     `json:"devMode"`
 			} `json:"oidcConfig"`
 		} `json:"app"`
 	}
@@ -408,6 +409,10 @@ func (c *Client) EnsureTenantRedirectURI(ctx context.Context, origin string) err
 		"appType":                "OIDC_APP_TYPE_USER_AGENT",
 		"authMethodType":         "OIDC_AUTH_METHOD_TYPE_NONE",
 		"accessTokenType":        "OIDC_TOKEN_TYPE_JWT",
+		// Preserve devMode (set by zitadel-init: true under http). A full oidc_config
+		// PUT omitting it resets it to false, which rejects http redirect URIs on
+		// non-loopback hosts (e.g. http://app.localhost/callback in local dev).
+		"devMode": cfg.DevMode,
 	}
 	return c.do(ctx, http.MethodPut, path+"/oidc_config", app.OrgID, body, nil)
 }
